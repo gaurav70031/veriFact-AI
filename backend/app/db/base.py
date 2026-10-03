@@ -1,25 +1,22 @@
 """
-Declarative base for all SQLAlchemy ORM models.
-
-Import Base here and all models register against it automatically.
-Alembic's env.py imports Base.metadata to detect schema changes.
+SQLAlchemy declarative base and shared timestamp mixin.
+All ORM models inherit from Base.
 """
 
-from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped
-from sqlalchemy import DateTime, func
+from __future__ import annotations
+
 from datetime import datetime
+
+from sqlalchemy import DateTime, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
-    """
-    Shared base class.  Every ORM model inherits from this.
-    Provides a common `created_at` mixin via TimestampMixin below.
-    """
     pass
 
 
 class TimestampMixin:
-    """Adds created_at / updated_at columns to any model that inherits it."""
+    """Adds created_at / updated_at to every model that inherits it."""
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

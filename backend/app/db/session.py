@@ -1,54 +1,47 @@
 """
-Async SQLAlchemy engine + session factory.
+Async SQLAlchemy engine and session factory.
 
-Usage inside FastAPI route/service:
+Usage in FastAPI routes / services:
 
-    async def my_endpoint(db: AsyncSession = Depends(get_db)):
-        result = await db.execute(select(User))
+    async def endpoint(db: AsyncSession = Depends(get_db)):
+        result = await db.execute(select(Analysis))
         ...
 """
 
+from __future__ import annotations
+
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
-    AsyncEngine,
 )
-from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 
 settings = get_settings()
 
-# asyncpg driver is required:  pip install asyncpg
-_DATABASE_URL = settings.database_url.replace(
-    "postgresql://", "postgresql+asyncpg://"
-).replace(
-    "postgres://", "postgresql+asyncpg://"   # handle both forms
-)
-
-# NullPool is recommended for async engines to avoid connection leaks in
-# short-lived serverless / test environments.  For a long-running server
-# switch to AsyncAdaptedQueuePool (default) by removing pool_class.
 engine: AsyncEngine = create_async_engine(
-    _DATABASE_URL,
-    echo=settings.debug,           # log SQL only in debug mode
-    pool_pre_ping=True,            # verify connections before use
-    pool_recycle=1800,             # recycle stale connections every 30 min
+    settings.database_url,
+    echo=settings.debug,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    pool_size=10,
+    max_overflow=20,
 )
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
-    expire_on_commit=False,        # objects remain usable after commit
+    expire_on_commit=False,
     autocommit=False,
     autoflush=False,
 )
 
 
-async def get_db() -> AsyncSession:          # type: ignore[return]
+async def get_db() -> AsyncSession:  # type: ignore[return]
     """
-    FastAPI dependency that yields a database session.
+    FastAPI dependency that yields a managed async DB session.
     Commits on success, rolls back on any exception, always closes.
     """
     async with AsyncSessionLocal() as session:
@@ -60,3 +53,16 @@ async def get_db() -> AsyncSession:          # type: ignore[return]
             raise
         finally:
             await session.close()
+
+
+async def create_all_tables() -> None:
+    """Create all tables that are registered on Base.metadata."""
+    from app.db.base import Base
+    import app.models  # noqa: F401 — ensures all models are registered
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def dispose_engine() -> None:
+    await engine.dispose()
