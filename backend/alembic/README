@@ -1,0 +1,24 @@
+Alembic migration scripts for Fake News Detection.
+
+Common commands (run from the backend/ directory):
+
+  # Apply all pending migrations
+  alembic upgrade head
+
+  # Roll back one migration
+  alembic downgrade -1
+
+  # Roll back all migrations
+  alembic downgrade base
+
+  # Generate a new migration from model changes
+  alembic revision --autogenerate -m "describe your change"
+
+  # Show current revision
+  alembic current
+
+  # Show migration history
+  alembic history --verbose
+
+  # Generate SQL script without applying (offline mode)
+  alembic upgrade head --sql > migration.sql
