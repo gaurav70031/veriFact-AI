@@ -1,0 +1,25 @@
+{
+  "model_id": "linear_svm",
+  "algorithm": "CalibratedClassifierCV",
+  "vectorizer": "TfidfVectorizer",
+  "train_samples": 160,
+  "val_samples": 20,
+  "train_time_s": 0.027,
+  "random_seed": 42,
+  "hyperparameters": {
+    "C": 1.0,
+    "max_iter": 2000,
+    "calibration_cv": 5
+  },
+  "tfidf_params": {
+    "max_features": 50000,
+    "ngram_range": [
+      1,
+      2
+    ],
+    "sublinear_tf": true,
+    "min_df": 2,
+    "max_df": 0.95
+  },
+  "artifact_path": "C:\\Users\\gaura\\AppData\\Local\\Temp\\pytest-of-Gaurav\\pytest-5\\test_batch_consistent_with_sin0\\linear_svm.pkl"
+}
