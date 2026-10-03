@@ -3,20 +3,21 @@ Request and response schemas for the /api/analyze endpoints.
 
 Response design
 ---------------
-The response deliberately separates two independent assessments:
+The response deliberately separates three independent signals:
 
   ml_verdict        — What the ML models predict (FAKE/REAL/UNVERIFIED/MIXED).
                       Derived from model probability scores only.
                       High confidence does NOT mean factual correctness.
 
-  evidence_verdict  — What the evidence search found
-                      (LIKELY_CREDIBLE / LIKELY_MISLEADING / CONTRADICTED /
-                       UNVERIFIED / INSUFFICIENT_EVIDENCE).
-                      Based on actual retrieved sources.
+  evidence_verdict  — What the evidence search found.
                       INSUFFICIENT_EVIDENCE ≠ false.
 
-Both verdicts are always present in the response so clients can display
-them together and explain the distinction to users.
+  explanation       — Which words the model focused on.
+                      High token weight ≠ factually incorrect word.
+                      This is a MODEL SIGNAL, not factual evidence.
+
+All three are always returned so clients can display and explain each
+independently to users.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ class AnalyzeTextRequest(BaseModel):
     title: Optional[str] = Field(
         None,
         max_length=500,
-        description="Optional article headline — prepended to text before inference.",
+        description="Optional headline — prepended to text before inference.",
     )
 
     @field_validator("text")
@@ -105,85 +106,111 @@ class AnalyzeClaimRequest(BaseModel):
 
 
 # =============================================================================
+# Explainability sub-schemas
+# =============================================================================
+
+class TokenWeight(BaseModel):
+    """
+    Attribution weight for a single token.
+
+    weight > 0  — model associates this token with FAKE patterns
+    weight < 0  — model associates this token with REAL patterns
+
+    IMPORTANT: weight != factual incorrectness.
+    This reflects statistical patterns, not fact-checking.
+    """
+    token:    str
+    weight:   float   # normalised to [-1, +1]
+    position: int     # 0-based index in the token list
+
+
+class ModelExplanation(BaseModel):
+    """
+    Explainability output for a single model's prediction.
+
+    method values
+    -------------
+    lime          — LIME perturbation-based feature importance (baseline models)
+    attention     — Attention-based attribution (DistilBERT)
+    tfidf_weights — TF-IDF raw feature weights (fallback when LIME unavailable)
+    unavailable   — Explanation could not be computed
+
+    Disclaimer
+    ----------
+    Always shown to users alongside the highlighted tokens.
+    Never claims any word "proves" the article is fake.
+    """
+    model_id:    str
+    model_name:  str
+    method:      str        # "lime" | "attention" | "tfidf_weights" | "unavailable"
+    label:       str        # predicted label this explanation is for
+    top_tokens:  list[TokenWeight] = []
+    plain_text:  str = ""   # human-readable, non-technical explanation
+    disclaimer:  str = ""   # always shown — clarifies model signal vs fact
+    error:       Optional[str] = None
+
+
+# =============================================================================
 # Response sub-schemas
 # =============================================================================
 
 class ModelPrediction(BaseModel):
     """
     Result from a single ML model.
-    This is a probability-based prediction, NOT a factual determination.
+    Probability-based prediction — NOT a factual determination.
     """
     model_id:          str
     model_name:        str
     label:             str    # "FAKE" | "REAL"
     is_fake:           bool
-    confidence:        float  # max(fake_prob, real_prob)
+    confidence:        float
     fake_probability:  float
     real_probability:  float
     inference_time_ms: float
+    # Inline explanation (compact; full detail via GET /explanation/{id})
+    explanation:       Optional[ModelExplanation] = None
 
 
 class EvidenceSourceResult(BaseModel):
-    """
-    One evidence source as returned in the API response.
-    Full article text is never included — only metadata and a short snippet.
-    """
-    source_name:          str
-    title:                str
-    url:                  str
-    snippet:              Optional[str]         # ≤ 500 chars
-    source_type:          str                   # "news_api" | "rss_feed" | etc.
-    published_at:         Optional[datetime]
-    retrieved_at:         datetime
-    relevance_score:      float                 # keyword+recency score from ranker
-    comparison_score:     float                 # semantic/lexical similarity to claim
-    rank:                 int
-    relationship_to_claim: str                  # "supporting" | "contradicting" | ...
+    source_name:           str
+    title:                 str
+    url:                   str
+    snippet:               Optional[str]
+    source_type:           str
+    published_at:          Optional[datetime]
+    retrieved_at:          datetime
+    relevance_score:       float
+    comparison_score:      float
+    rank:                  int
+    relationship_to_claim: str
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class ClaimResult(BaseModel):
-    """
-    Full assessment for one extracted claim.
-
-    Contains BOTH the ML-derived verdict AND the evidence-based assessment
-    so clients can display and explain them independently.
-    """
     position:    int
     claim_text:  str
 
-    # ── ML-derived ────────────────────────────────────────────────────────────
-    ml_verdict:   Optional[str]   # "FAKE" | "REAL" | "UNVERIFIED" | "MIXED"
+    ml_verdict:    Optional[str]
     ml_confidence: Optional[float]
 
-    # ── Evidence-based (separate from ML) ────────────────────────────────────
-    evidence_verdict: Optional[str]   # "LIKELY_CREDIBLE" | "CONTRADICTED" | etc.
+    evidence_verdict:     Optional[str]
     evidence_explanation: Optional[str]
 
-    # ── Evidence items ────────────────────────────────────────────────────────
-    evidence_sources:    list[EvidenceSourceResult] = []
+    # Top tokens across all models for this claim (aggregated)
+    top_tokens: list[TokenWeight] = []
 
-    # ── Evidence summary counts ───────────────────────────────────────────────
+    evidence_sources:    list[EvidenceSourceResult] = []
     supporting_count:    int = 0
     contradicting_count: int = 0
     inconclusive_count:  int = 0
     not_relevant_count:  int = 0
     total_evidence:      int = 0
-
-    # ── Conflict flag ─────────────────────────────────────────────────────────
-    # True when ML and evidence assessments disagree significantly
     assessment_conflict: bool = False
-
-    # ── Limitations ───────────────────────────────────────────────────────────
     evidence_limitations: list[str] = []
 
 
 class EvidenceSummary(BaseModel):
-    """
-    Aggregate evidence statistics across all claims in the analysis.
-    Always present even when no evidence was found.
-    """
     total_evidence:      int
     supporting_count:    int
     contradicting_count: int
@@ -192,8 +219,6 @@ class EvidenceSummary(BaseModel):
     providers_used:      list[str]
     providers_failed:    list[str]
     evidence_limitations: list[str]
-
-    # Whether absence of evidence was due to provider failure vs true no-results
     all_providers_failed: bool = False
 
 
@@ -203,47 +228,41 @@ class EvidenceSummary(BaseModel):
 
 class AnalysisResponse(BaseModel):
     """
-    Complete analysis response.
+    Complete analysis result.
 
-    Two independent assessments are always returned:
+    Three independent signals
+    -------------------------
+    1. ml_verdict        — statistical model prediction
+    2. evidence_verdict  — evidence-based assessment
+    3. explanations      — which words drove the model (model signal, not fact)
 
-    1. ml_verdict / ml_confidence
-       — Ensemble output of TF-IDF models and/or DistilBERT.
-       — High confidence means the text pattern matches known fake/real patterns.
-       — Does NOT verify the factual content of any claim.
-
-    2. evidence_verdict (per claim and overall)
-       — Based on retrieved news/RSS/search evidence.
-       — INSUFFICIENT_EVIDENCE means not enough was found, NOT that it's false.
-       — CONTRADICTED means multiple independent sources dispute a claim.
-
-    The claims list contains the full per-claim breakdown.
+    All three are independent; do not conflate them.
     """
 
     id:             int
-    input_type:     str          # "text" | "url" | "claim"
+    input_type:     str
     original_input: str
     source_url:     Optional[str]
     article_title:  Optional[str]
 
     # ── ML assessment ─────────────────────────────────────────────────────────
-    ml_verdict:    str           # "FAKE" | "REAL" | "UNVERIFIED" | "MIXED"
+    ml_verdict:    str
     ml_confidence: Optional[float]
 
     # ── Evidence-based assessment ─────────────────────────────────────────────
-    evidence_verdict: Optional[str]  # "LIKELY_CREDIBLE" | "CONTRADICTED" | etc.
+    evidence_verdict:     Optional[str]
     evidence_explanation: Optional[str]
 
-    # ── Per-model ML breakdown ────────────────────────────────────────────────
+    # ── Per-model predictions (with inline explanations) ─────────────────────
     model_predictions: list[ModelPrediction]
 
-    # ── Per-claim breakdown (includes evidence per claim) ─────────────────────
+    # ── Per-claim breakdown ───────────────────────────────────────────────────
     claims: list[ClaimResult] = []
 
     # ── Aggregate evidence summary ────────────────────────────────────────────
     evidence_summary: Optional[EvidenceSummary] = None
 
-    # ── Legacy field: plain-text summary (kept for backwards compat) ──────────
+    # ── Legacy plain-text summary ─────────────────────────────────────────────
     summary: Optional[str] = None
 
     # ── Metadata ──────────────────────────────────────────────────────────────
@@ -255,11 +274,90 @@ class AnalysisResponse(BaseModel):
 
 
 class AnalysisErrorResponse(BaseModel):
-    """Returned when an analysis fails (e.g., URL extraction error)."""
-
     id:            int
-    status:        str   # "failed"
+    status:        str
     error_message: str
     created_at:    datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
+# Standalone explanation response (GET /api/v1/explanation/{analysis_id})
+# =============================================================================
+
+class ExplanationTokenWeight(BaseModel):
+    """Token weight as returned by the explanation endpoint."""
+    token:    str
+    weight:   float
+    position: int
+
+
+class PerModelExplanation(BaseModel):
+    """
+    Full explanation for one model's prediction on one analysis.
+
+    Caveats displayed to users
+    --------------------------
+    * Token weights reflect statistical training patterns.
+    * They are NOT evidence that any word is factually wrong.
+    * Absence of a word from the list does not mean it is neutral.
+    * Two articles can have identical model signals with opposite facts.
+    """
+    model_id:     str
+    model_name:   str
+    method:       str
+    label:        str
+    confidence:   float
+    tokens:       list[ExplanationTokenWeight] = []
+    top_tokens:   list[ExplanationTokenWeight] = []
+    plain_text:   str = ""
+    disclaimer:   str = ""
+    error:        Optional[str] = None
+
+
+class AggregateTokenWeight(BaseModel):
+    """Token weight averaged across all available models for one claim."""
+    token:  str
+    weight: float
+
+
+class ClaimExplanation(BaseModel):
+    """Explanation breakdown for one extracted claim."""
+    position:          int
+    claim_text:        str
+    aggregate_tokens:  list[AggregateTokenWeight] = []
+
+
+class ExplanationResponse(BaseModel):
+    """
+    Full explanation response for GET /api/v1/explanation/{analysis_id}.
+
+    Contains per-model explanations, per-claim aggregate tokens,
+    and a top-level plain-language description of what the model found.
+
+    Signal vs evidence warning
+    --------------------------
+    This explanation shows which words the MODEL focused on.
+    It does NOT show which words are factually incorrect.
+    Model signals and factual evidence are separate — always display both.
+    """
+    analysis_id:           int
+    ml_verdict:            str
+    ml_confidence:         Optional[float]
+    evidence_verdict:      Optional[str] = None
+
+    # Per-model LIME/attention explanations
+    model_explanations:    list[PerModelExplanation] = []
+
+    # Per-claim aggregate token weights
+    claim_explanations:    list[ClaimExplanation]    = []
+
+    # Signal-vs-evidence warning (always display)
+    signal_vs_evidence_warning: str = (
+        "The highlighted words show which parts of the text the ML models "
+        "associated with known fake or real content patterns during training. "
+        "This is a MODEL SIGNAL — it does not constitute factual evidence "
+        "that any word or phrase is incorrect. Always check the evidence "
+        "section for actual corroborating or contradicting sources."
+    )

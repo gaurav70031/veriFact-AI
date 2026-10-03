@@ -4,61 +4,69 @@ Analysis service — full pipeline orchestrator.
 Pipeline for every input type
 ------------------------------
   text  → ML inference ║ claim extraction → per-claim evidence → compare → verdict
+          → explainability (non-blocking)
   url   → extract article → same as text
   claim → ML inference ║ per-claim evidence → compare → verdict
+          → explainability (non-blocking)
 
 Concurrency model
 -----------------
 ML inference and evidence retrieval run concurrently via asyncio.gather.
-ML is CPU/GPU-bound → thread-pool executor.
-Evidence retrieval is I/O-bound → pure async.
-Claim extraction + comparison are synchronous but fast (< 50 ms).
+Explainability runs after inference in a thread-pool executor — it is
+non-blocking and never prevents the analysis from completing.
 
-Two independent assessments
-----------------------------
+Three independent signals
+-------------------------
 ml_verdict       — probability-based, from model weights.
 evidence_verdict — based on actual retrieved sources.
-Neither overrides the other.  Both are stored and returned.
+explanation      — which tokens the model attended to (model signal, NOT facts).
+None overrides the others.  All are stored and returned.
 
-Evidence failure is non-blocking
----------------------------------
-If all providers fail or time out the analysis still completes with
-evidence_verdict = INSUFFICIENT_EVIDENCE.  The ML verdict is unaffected.
+Explanation failure is non-blocking
+-------------------------------------
+If LIME or attention attribution fails for any model the analysis still
+completes.  explanation_json is left NULL for that prediction row.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
 from functools import partial
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.claim_extractor   import extract_claims, ExtractedClaim
+from app.analysis.claim_extractor    import extract_claims, ExtractedClaim
 from app.analysis.evidence_comparator import compare as compare_evidence, ComparisonResult
-from app.analysis.verdict_engine    import (
+from app.analysis.explainer          import (
+    explain_baseline_with_fallback,
+    explain_transformer,
+    aggregate_top_tokens,
+    ExplanationResult,
+)
+from app.analysis.verdict_engine     import (
     assess_claim, aggregate_verdict,
     ClaimVerdictResult, AnalysisVerdict,
     DEFAULT_CONFIG,
 )
-from app.core.errors                import ModelUnavailableError, ArticleExtractionError
-from app.evidence.evidence_service  import retrieve_evidence
-from app.evidence.query_extractor   import extract_queries
-from app.evidence.schema            import EvidenceResult, EvidenceStatus
+from app.core.errors                 import ModelUnavailableError, ArticleExtractionError
+from app.evidence.evidence_service   import retrieve_evidence
+from app.evidence.query_extractor    import extract_queries
+from app.evidence.schema             import EvidenceResult
 from app.extraction.article_extractor import extract_article
-from app.ml.model_registry          import get_registry
-from app.models.analysis            import Analysis, InputType, AnalysisStatus, FinalVerdict
-from app.models.claim               import Claim, ClaimVerdict, EvidenceAssessment
-from app.models.evidence_source     import EvidenceSource, SourceType, EvidenceRelationship
-from app.models.model_version       import ModelVersion
-from app.models.prediction          import Prediction, PredictionLabel
-from app.schemas.analyze            import (
-    AnalysisResponse, ModelPrediction,
+from app.ml.model_registry           import get_registry
+from app.models.analysis             import Analysis, InputType, AnalysisStatus, FinalVerdict
+from app.models.claim                import Claim, ClaimVerdict, EvidenceAssessment
+from app.models.evidence_source      import EvidenceSource, SourceType, EvidenceRelationship
+from app.models.model_version        import ModelVersion
+from app.models.prediction           import Prediction, PredictionLabel
+from app.schemas.analyze             import (
+    AnalysisResponse, ModelPrediction, ModelExplanation, TokenWeight,
     ClaimResult, EvidenceSourceResult, EvidenceSummary,
 )
 
@@ -72,7 +80,6 @@ _MODEL_WEIGHTS: dict[str, float] = {
     "distilbert":          0.40,
 }
 
-# Source type mapping from evidence schema → ORM enum
 _SRC_TYPE_MAP: dict[str, SourceType] = {
     "news_api":   SourceType.NEWS_API,
     "gnews":      SourceType.NEWS_API,
@@ -82,19 +89,16 @@ _SRC_TYPE_MAP: dict[str, SourceType] = {
     "fact_check": SourceType.FACT_CHECK,
 }
 
+_BASELINE_MODEL_IDS = {"logistic_regression", "linear_svm", "naive_bayes"}
+
 
 # =============================================================================
 # ML ensemble
 # =============================================================================
 
-def _compute_ensemble_verdict(predictions: dict[str, dict]) -> tuple[str, float, float, float]:
-    """
-    Weighted average over all model predictions.
-
-    Returns
-    -------
-    (verdict, confidence, avg_fake_prob, avg_real_prob)
-    """
+def _compute_ensemble_verdict(
+    predictions: dict[str, dict],
+) -> tuple[str, float, float, float]:
     if not predictions:
         return "UNVERIFIED", 0.5, 0.5, 0.5
 
@@ -112,13 +116,11 @@ def _compute_ensemble_verdict(predictions: dict[str, dict]) -> tuple[str, float,
     avg_real = weighted_real / total_weight
     confidence = max(avg_fake, avg_real)
 
-    if confidence < 0.55:
-        verdict = "MIXED"
-    elif avg_fake > avg_real:
-        verdict = "FAKE"
-    else:
-        verdict = "REAL"
-
+    verdict = (
+        "MIXED" if confidence < 0.55 else
+        "FAKE"  if avg_fake > avg_real else
+        "REAL"
+    )
     return verdict, round(confidence, 6), round(avg_fake, 6), round(avg_real, 6)
 
 
@@ -127,7 +129,6 @@ def _compute_ensemble_verdict(predictions: dict[str, dict]) -> tuple[str, float,
 # =============================================================================
 
 async def _run_inference_async(text: str) -> dict[str, dict]:
-    """Run all available models in a thread-pool executor."""
     registry = get_registry()
     results: dict[str, dict] = {}
     loop = asyncio.get_event_loop()
@@ -159,60 +160,98 @@ async def _run_inference_async(text: str) -> dict[str, dict]:
 
 
 # =============================================================================
+# Explainability  (Step 1.5 — after inference, non-blocking)
+# =============================================================================
+
+def _run_explanations_sync(
+    text:        str,
+    predictions: dict[str, dict],
+) -> dict[str, ExplanationResult]:
+    """
+    Generate LIME / attention explanations for every active model.
+    Runs synchronously in a thread-pool executor.
+    Never raises — any failure returns ExplanationResult.unavailable().
+    """
+    registry = get_registry()
+    results: dict[str, ExplanationResult] = {}
+
+    # Baseline models — LIME (with TF-IDF fallback)
+    if registry._baseline_ready:
+        for model_id in _BASELINE_MODEL_IDS:
+            if model_id in predictions:
+                try:
+                    results[model_id] = explain_baseline_with_fallback(text, model_id)
+                except Exception as exc:
+                    logger.warning("Explanation failed for '%s': %s", model_id, exc)
+                    results[model_id] = ExplanationResult.unavailable(model_id, str(exc))
+
+    # Transformer — attention attribution
+    if registry._transformer_ready and "distilbert" in predictions:
+        try:
+            results["distilbert"] = explain_transformer(text)
+        except Exception as exc:
+            logger.warning("Transformer explanation failed: %s", exc)
+            results["distilbert"] = ExplanationResult.unavailable("distilbert", str(exc))
+
+    return results
+
+
+async def _generate_explanations(
+    text:        str,
+    predictions: dict[str, dict],
+) -> dict[str, ExplanationResult]:
+    """Async wrapper — runs synchronous explainers in thread-pool."""
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(
+            None,
+            partial(_run_explanations_sync, text, predictions),
+        )
+    except Exception as exc:
+        logger.warning("Explanation generation failed (non-blocking): %s", exc)
+        return {}
+
+
+# =============================================================================
 # Evidence retrieval (per-claim)
 # =============================================================================
 
 async def _safe_retrieve_evidence(claim: str) -> Optional[EvidenceResult]:
-    """Retrieve evidence for a single claim; never raises."""
     try:
         return await retrieve_evidence(claim)
     except Exception as exc:
-        logger.warning("Evidence retrieval failed for claim '%s…': %s", claim[:60], exc)
+        logger.warning("Evidence retrieval failed for '%s…': %s", claim[:60], exc)
         return None
 
 
 async def _retrieve_all_evidence(
     claims: list[ExtractedClaim],
 ) -> list[Optional[EvidenceResult]]:
-    """
-    Retrieve evidence for every extracted claim concurrently.
-    Returns a list aligned with `claims`.
-    """
     tasks = [_safe_retrieve_evidence(c.text) for c in claims]
     return await asyncio.gather(*tasks)
 
 
 # =============================================================================
-# Evidence comparison (per claim × evidence item)
+# Evidence comparison
 # =============================================================================
 
 def _compare_claim_to_evidence(
-    claim:          ExtractedClaim,
-    ev_result:      Optional[EvidenceResult],
-    ml_label:       Optional[str],
-    ml_fake_prob:   Optional[float],
-    ml_real_prob:   Optional[float],
-    ml_confidence:  Optional[float],
+    claim:         ExtractedClaim,
+    ev_result:     Optional[EvidenceResult],
+    ml_label:      Optional[str],
+    ml_fake_prob:  Optional[float],
+    ml_real_prob:  Optional[float],
+    ml_confidence: Optional[float],
 ) -> tuple[ClaimVerdictResult, list[tuple[EvidenceSource, ComparisonResult]]]:
-    """
-    Compare one claim against all its evidence items.
-
-    Returns
-    -------
-    (ClaimVerdictResult, list of (EvidenceSource-to-persist, ComparisonResult))
-    """
-    # Extract keywords once for reuse in comparator
     qs = extract_queries(claim.text)
     keywords = qs.keywords
 
     relationship_counts: dict[EvidenceRelationship, int] = defaultdict(int)
     ev_source_pairs: list[tuple[EvidenceSource, ComparisonResult]] = []
-
     total_ev = len(ev_result.items) if ev_result and ev_result.items else 0
 
     if ev_result and ev_result.items:
         for rank, ev_item in enumerate(ev_result.items, start=1):
-            # Build text to compare against (title + snippet)
             snippet_text = " ".join(filter(None, [
                 ev_item.title,
                 ev_item.description or "",
@@ -223,20 +262,19 @@ def _compare_claim_to_evidence(
                 snippet=snippet_text,
                 claim_keywords=keywords,
             )
-
             relationship_counts[comparison.relationship] += 1
 
-            # Map evidence schema SourceType → ORM SourceType
-            src_type_val = ev_item.source_type.value if hasattr(ev_item.source_type, "value") else str(ev_item.source_type)
-            orm_src_type = _SRC_TYPE_MAP.get(src_type_val, SourceType.NEWS_API)
-
+            src_type_val = (
+                ev_item.source_type.value
+                if hasattr(ev_item.source_type, "value")
+                else str(ev_item.source_type)
+            )
             ev_src_row = EvidenceSource(
-                # claim_id filled in later after Claim is flushed
                 source_name=ev_item.source_name[:200],
                 title=ev_item.title[:500],
                 url=ev_item.url[:2000],
                 snippet=(ev_item.description or "")[:500] or None,
-                source_type=orm_src_type,
+                source_type=_SRC_TYPE_MAP.get(src_type_val, SourceType.NEWS_API),
                 published_at=ev_item.published_at,
                 retrieved_at=ev_item.retrieved_at,
                 relevance_score=ev_item.relevance_score,
@@ -246,7 +284,6 @@ def _compare_claim_to_evidence(
             )
             ev_source_pairs.append((ev_src_row, comparison))
 
-    # Assess this claim using the verdict engine
     claim_verdict_result = assess_claim(
         claim_text=claim.text,
         position=claim.position,
@@ -258,7 +295,6 @@ def _compare_claim_to_evidence(
         ml_real_prob=ml_real_prob,
         config=DEFAULT_CONFIG,
     )
-
     return claim_verdict_result, ev_source_pairs
 
 
@@ -308,43 +344,39 @@ async def _get_or_create_model_version(
 # =============================================================================
 
 async def _persist_full_analysis(
-    db:               AsyncSession,
-    analysis:         Analysis,
-    predictions:      dict[str, dict],
-    extracted_claims: list[ExtractedClaim],
-    claim_results:    list[ClaimVerdictResult],
+    db:                 AsyncSession,
+    analysis:           Analysis,
+    predictions:        dict[str, dict],
+    extracted_claims:   list[ExtractedClaim],
+    claim_results:      list[ClaimVerdictResult],
     ev_pairs_per_claim: list[list[tuple[EvidenceSource, ComparisonResult]]],
-    verdict:          AnalysisVerdict,
+    verdict:            AnalysisVerdict,
+    explanations:       dict[str, ExplanationResult],   # NEW
 ) -> Analysis:
-    """
-    Persist Prediction rows, Claim rows, and EvidenceSource rows.
-    Updates Analysis with both ML verdict and evidence verdict.
-    """
     ml_label, ml_conf, ml_fake, ml_real = _compute_ensemble_verdict(predictions)
 
-    # ── Update Analysis row ───────────────────────────────────────────────────
     analysis.final_verdict    = FinalVerdict(ml_label)
     analysis.final_confidence = ml_conf
     analysis.status           = AnalysisStatus.COMPLETED
-
-    # Build plain-text summary that includes both verdicts
-    ml_parts = [
-        f"{mid}: {p.get('label','?')} ({p.get('confidence',0):.0%})"
-        for mid, p in predictions.items()
-    ]
-    ev_verdict_str = verdict.overall_evidence_assessment.value
     analysis.summary = (
         f"ML: {ml_label} ({ml_conf:.0%}) — "
-        f"Evidence: {ev_verdict_str}. "
+        f"Evidence: {verdict.overall_evidence_assessment.value}. "
         f"{verdict.overall_explanation}"
     )
 
-    # ── Persist Prediction rows ───────────────────────────────────────────────
+    # ── Prediction rows (with explanation_json) ───────────────────────────────
     for model_id, pred in predictions.items():
         mv = await _get_or_create_model_version(db, model_id)
         if mv is None:
             continue
         is_fake = pred.get("is_fake", pred.get("label") == "FAKE")
+
+        # Serialise explanation if available
+        exp_json: Optional[str] = None
+        if model_id in explanations:
+            exp = explanations[model_id]
+            exp_json = json.dumps(exp.to_dict())
+
         db.add(Prediction(
             analysis_id=analysis.id,
             model_version_id=mv.id,
@@ -352,12 +384,23 @@ async def _persist_full_analysis(
             confidence=pred.get("confidence", 0.5),
             fake_probability=pred.get("fake_probability", 0.5),
             real_probability=pred.get("real_probability", 0.5),
+            explanation_json=exp_json,
         ))
 
-    # ── Persist Claim + EvidenceSource rows ───────────────────────────────────
+    # ── Claim + EvidenceSource rows (with top_tokens_json) ────────────────────
     for i, (ec, cvr) in enumerate(zip(extracted_claims, claim_results)):
-        # Map ML verdict → ClaimVerdict enum
-        ml_verdict_for_claim = ml_label if ml_label in ("FAKE", "REAL", "UNVERIFIED", "MIXED") else "UNVERIFIED"
+        ml_verdict_for_claim = (
+            ml_label
+            if ml_label in ("FAKE", "REAL", "UNVERIFIED", "MIXED")
+            else "UNVERIFIED"
+        )
+
+        # Aggregate top tokens across all models for this claim
+        top_tokens_json: Optional[str] = None
+        if explanations:
+            agg = aggregate_top_tokens(list(explanations.values()), top_n=15)
+            if agg:
+                top_tokens_json = json.dumps(agg)
 
         claim_row = Claim(
             analysis_id=analysis.id,
@@ -366,13 +409,12 @@ async def _persist_full_analysis(
             verdict=ClaimVerdict(ml_verdict_for_claim),
             confidence=ml_conf,
             evidence_verdict=cvr.evidence_assessment,
-            explanation=(
-                f"ML: {ml_label} ({ml_conf:.0%})"
-            ),
+            explanation=f"ML: {ml_label} ({ml_conf:.0%})",
             evidence_explanation=cvr.evidence_explanation,
+            top_tokens_json=top_tokens_json,
         )
         db.add(claim_row)
-        await db.flush()   # need claim_row.id for FK
+        await db.flush()
 
         for ev_src_row, _ in ev_pairs_per_claim[i]:
             ev_src_row.claim_id = claim_row.id
@@ -385,20 +427,39 @@ async def _persist_full_analysis(
 # Response builder
 # =============================================================================
 
-def _build_response(
-    analysis:         Analysis,
-    predictions:      dict[str, dict],
-    extracted_claims: list[ExtractedClaim],
-    claim_results:    list[ClaimVerdictResult],
-    ev_results:       list[Optional[EvidenceResult]],
-    ev_pairs_per_claim: list[list[tuple[EvidenceSource, ComparisonResult]]],
-    verdict:          AnalysisVerdict,
-) -> AnalysisResponse:
-    """Construct the full AnalysisResponse from all pipeline outputs."""
+def _explanation_result_to_schema(
+    exp: ExplanationResult,
+    model_id: str,
+) -> ModelExplanation:
+    """Convert internal ExplanationResult → Pydantic ModelExplanation."""
+    return ModelExplanation(
+        model_id=model_id,
+        model_name=model_id.replace("_", " ").title(),
+        method=exp.method,
+        label=exp.label,
+        top_tokens=[
+            TokenWeight(token=t.token, weight=t.weight, position=t.position)
+            for t in exp.top_tokens
+        ],
+        plain_text=exp.plain_text,
+        disclaimer=exp.disclaimer,
+        error=exp.error,
+    )
 
+
+def _build_response(
+    analysis:           Analysis,
+    predictions:        dict[str, dict],
+    extracted_claims:   list[ExtractedClaim],
+    claim_results:      list[ClaimVerdictResult],
+    ev_results:         list[Optional[EvidenceResult]],
+    ev_pairs_per_claim: list[list[tuple[EvidenceSource, ComparisonResult]]],
+    verdict:            AnalysisVerdict,
+    explanations:       dict[str, ExplanationResult],   # NEW
+) -> AnalysisResponse:
     ml_label, ml_conf, _, _ = _compute_ensemble_verdict(predictions)
 
-    # Per-model ML predictions
+    # Per-model predictions — now include inline explanation
     model_preds = [
         ModelPrediction(
             model_id=mid,
@@ -409,17 +470,19 @@ def _build_response(
             fake_probability=float(p.get("fake_probability", 0.5)),
             real_probability=float(p.get("real_probability", 0.5)),
             inference_time_ms=float(p.get("inference_time_ms", 0.0)),
+            explanation=(
+                _explanation_result_to_schema(explanations[mid], mid)
+                if mid in explanations else None
+            ),
         )
         for mid, p in predictions.items()
     ]
 
-    # Per-claim results
+    # Per-claim results — include aggregate top_tokens
     claim_responses: list[ClaimResult] = []
     for i, (ec, cvr) in enumerate(zip(extracted_claims, claim_results)):
-        # Build EvidenceSourceResult list for this claim
-        ev_source_results: list[EvidenceSourceResult] = []
-        for ev_src_row, _ in ev_pairs_per_claim[i]:
-            ev_source_results.append(EvidenceSourceResult(
+        ev_source_results = [
+            EvidenceSourceResult(
                 source_name=ev_src_row.source_name,
                 title=ev_src_row.title,
                 url=ev_src_row.url,
@@ -431,7 +494,21 @@ def _build_response(
                 comparison_score=ev_src_row.comparison_score,
                 rank=ev_src_row.rank,
                 relationship_to_claim=ev_src_row.relationship_to_claim.value,
-            ))
+            )
+            for ev_src_row, _ in ev_pairs_per_claim[i]
+        ]
+
+        # Aggregate token weights for this claim
+        agg_tokens: list[TokenWeight] = []
+        if explanations:
+            for agg in aggregate_top_tokens(list(explanations.values()), top_n=10):
+                agg_tokens.append(
+                    TokenWeight(
+                        token=agg["token"],
+                        weight=agg["weight"],
+                        position=0,
+                    )
+                )
 
         claim_responses.append(ClaimResult(
             position=ec.position,
@@ -440,6 +517,7 @@ def _build_response(
             ml_confidence=ml_conf,
             evidence_verdict=cvr.evidence_assessment.value,
             evidence_explanation=cvr.evidence_explanation,
+            top_tokens=agg_tokens,
             evidence_sources=ev_source_results,
             supporting_count=cvr.supporting_count,
             contradicting_count=cvr.contradicting_count,
@@ -457,7 +535,7 @@ def _build_response(
         if ev_r:
             all_providers_used.extend(ev_r.providers_used)
             all_providers_failed.extend(ev_r.providers_failed)
-    all_providers_used   = list(dict.fromkeys(all_providers_used))    # deduplicate, keep order
+    all_providers_used   = list(dict.fromkeys(all_providers_used))
     all_providers_failed = list(dict.fromkeys(all_providers_failed))
 
     ev_summary = EvidenceSummary(
@@ -499,35 +577,33 @@ def _build_response(
 # =============================================================================
 
 async def _run_full_pipeline(
-    db:              AsyncSession,
-    analysis:        Analysis,
-    full_text:       str,
-    evidence_seed:   str,
-    max_claims:      int = 5,
+    db:            AsyncSession,
+    analysis:      Analysis,
+    full_text:     str,
+    evidence_seed: str,
+    max_claims:    int = 5,
 ) -> AnalysisResponse:
     """
-    Shared pipeline for all three input types.
-
     Steps
     -----
-    1. ML inference + claim extraction (concurrent)
-    2. Per-claim evidence retrieval (all claims concurrent)
-    3. Per-claim evidence comparison (synchronous, fast)
-    4. Verdict aggregation
-    5. DB persistence
-    6. Response construction
+    1.  ML inference + claim extraction      (concurrent)
+    2.  Explainability generation            (thread-pool, non-blocking)
+    3.  Per-claim evidence retrieval         (all claims concurrent)
+    4.  Per-claim evidence comparison        (synchronous, fast)
+    5.  Verdict aggregation
+    6.  DB persistence
+    7.  Response construction
     """
     t0 = time.perf_counter()
 
-    # ── Step 1: ML inference + claim extraction (concurrent) ─────────────────
-    ml_coro    = _run_inference_async(full_text)
-    # Claim extraction is synchronous but wrapped to run in executor for safety
+    # ── Step 1: ML inference + claim extraction ───────────────────────────────
     loop = asyncio.get_event_loop()
+    ml_coro     = _run_inference_async(full_text)
     claims_coro = loop.run_in_executor(
         None, lambda: extract_claims(full_text, max_claims=max_claims)
     )
     try:
-        (predictions, extracted_claims) = await asyncio.gather(ml_coro, claims_coro)
+        predictions, extracted_claims = await asyncio.gather(ml_coro, claims_coro)
     except ModelUnavailableError:
         analysis.status = AnalysisStatus.FAILED
         analysis.error_message = "No ML models are available."
@@ -539,13 +615,19 @@ async def _run_full_pipeline(
         ml_label, ml_conf * 100, len(predictions), len(extracted_claims),
     )
 
-    # ── Step 2: Per-claim evidence retrieval (all concurrent) ────────────────
+    # ── Step 2: Explainability (non-blocking — failures ignored) ─────────────
+    explanations = await _generate_explanations(full_text, predictions)
+    if explanations:
+        available = [m for m, e in explanations.items() if e.method != "unavailable"]
+        logger.info("Explanations generated for: %s", available)
+
+    # ── Step 3: Per-claim evidence retrieval ──────────────────────────────────
     ev_results: list[Optional[EvidenceResult]] = await _retrieve_all_evidence(
         extracted_claims
     )
 
-    # ── Step 3: Evidence comparison ───────────────────────────────────────────
-    claim_results:      list[ClaimVerdictResult]                        = []
+    # ── Step 4: Evidence comparison ───────────────────────────────────────────
+    claim_results:      list[ClaimVerdictResult]                            = []
     ev_pairs_per_claim: list[list[tuple[EvidenceSource, ComparisonResult]]] = []
 
     for ec, ev_result in zip(extracted_claims, ev_results):
@@ -560,9 +642,9 @@ async def _run_full_pipeline(
         claim_results.append(cvr)
         ev_pairs_per_claim.append(ev_pairs)
 
-    # ── Step 4: Aggregate verdict ─────────────────────────────────────────────
-    all_providers_used   = []
-    all_providers_failed = []
+    # ── Step 5: Aggregate verdict ─────────────────────────────────────────────
+    all_providers_used:   list[str] = []
+    all_providers_failed: list[str] = []
     for ev_r in ev_results:
         if ev_r:
             all_providers_used.extend(ev_r.providers_used)
@@ -576,15 +658,7 @@ async def _run_full_pipeline(
         providers_failed=list(dict.fromkeys(all_providers_failed)),
     )
 
-    logger.info(
-        "Evidence verdict: %s | supporting=%d contradicting=%d inconclusive=%d",
-        verdict.overall_evidence_assessment.value,
-        verdict.total_supporting,
-        verdict.total_contradicting,
-        verdict.total_inconclusive,
-    )
-
-    # ── Step 5: Persist ───────────────────────────────────────────────────────
+    # ── Step 6: Persist ───────────────────────────────────────────────────────
     analysis = await _persist_full_analysis(
         db=db,
         analysis=analysis,
@@ -593,10 +667,11 @@ async def _run_full_pipeline(
         claim_results=claim_results,
         ev_pairs_per_claim=ev_pairs_per_claim,
         verdict=verdict,
+        explanations=explanations,
     )
     analysis.processing_time_ms = int((time.perf_counter() - t0) * 1000)
 
-    # ── Step 6: Build response ────────────────────────────────────────────────
+    # ── Step 7: Build response ────────────────────────────────────────────────
     return _build_response(
         analysis=analysis,
         predictions=predictions,
@@ -605,6 +680,7 @@ async def _run_full_pipeline(
         ev_results=ev_results,
         ev_pairs_per_claim=ev_pairs_per_claim,
         verdict=verdict,
+        explanations=explanations,
     )
 
 
@@ -617,9 +693,7 @@ async def analyse_text(
     text:  str,
     title: Optional[str] = None,
 ) -> AnalysisResponse:
-    """Analyse raw article text or multi-sentence content."""
     combined = f"{title} {text}".strip() if title else text
-
     analysis = Analysis(
         input_type=InputType.TEXT,
         original_input=combined[:2000],
@@ -628,13 +702,10 @@ async def analyse_text(
     )
     db.add(analysis)
     await db.flush()
-
     try:
         return await _run_full_pipeline(
-            db=db,
-            analysis=analysis,
-            full_text=combined,
-            evidence_seed=combined[:500],
+            db=db, analysis=analysis,
+            full_text=combined, evidence_seed=combined[:500],
         )
     except ModelUnavailableError:
         analysis.status = AnalysisStatus.FAILED
@@ -646,16 +717,12 @@ async def analyse_url(
     db:  AsyncSession,
     url: str,
 ) -> AnalysisResponse:
-    """Extract article from URL then analyse."""
     analysis = Analysis(
-        input_type=InputType.URL,
-        original_input=url,
-        source_url=url,
-        status=AnalysisStatus.PROCESSING,
+        input_type=InputType.URL, original_input=url,
+        source_url=url, status=AnalysisStatus.PROCESSING,
     )
     db.add(analysis)
     await db.flush()
-
     try:
         article = await extract_article(url)
     except ArticleExtractionError as exc:
@@ -666,11 +733,9 @@ async def analyse_url(
     combined = f"{article.title or ''} {article.text}".strip()
     analysis.article_title = article.title
     analysis.article_text  = article.text[:10_000]
-
     try:
         return await _run_full_pipeline(
-            db=db,
-            analysis=analysis,
+            db=db, analysis=analysis,
             full_text=combined,
             evidence_seed=(article.title or combined)[:500],
         )
@@ -685,9 +750,7 @@ async def analyse_claim(
     claim:   str,
     context: Optional[str] = None,
 ) -> AnalysisResponse:
-    """Analyse a short factual claim with optional context."""
     combined = f"{claim} {context or ''}".strip()
-
     analysis = Analysis(
         input_type=InputType.TEXT,
         original_input=claim[:500],
@@ -695,14 +758,10 @@ async def analyse_claim(
     )
     db.add(analysis)
     await db.flush()
-
     try:
         return await _run_full_pipeline(
-            db=db,
-            analysis=analysis,
-            full_text=combined,
-            evidence_seed=claim,   # search on the raw claim, not padded context
-            max_claims=1,           # claim input = already one claim
+            db=db, analysis=analysis,
+            full_text=combined, evidence_seed=claim, max_claims=1,
         )
     except ModelUnavailableError:
         analysis.status = AnalysisStatus.FAILED

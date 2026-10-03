@@ -28,6 +28,10 @@ nltk==3.8.1
 numpy==1.26.4
 pandas==2.2.2
 
+# ── Explainability ────────────────────────────────────────────────────────────
+lime==0.2.0.1          # LIME for TF-IDF baseline models
+# sentence-transformers  # optional — improves evidence comparator similarity scoring
+
 # ── ML inference (transformer) — install separately if GPU is available ───────
 # torch and transformers are heavy; pin versions that match the training env.
 # Uncomment if this backend will run transformer inference directly:
