@@ -1,0 +1,86 @@
+{
+  "total_rows": 200,
+  "splits": {
+    "train": {
+      "split": "train",
+      "total_rows": 160,
+      "fake_count": 80,
+      "real_count": 80,
+      "fake_pct": 50.0,
+      "real_pct": 50.0,
+      "text_length": {
+        "min": 212,
+        "max": 212,
+        "mean": 212.0,
+        "median": 212.0,
+        "p5": 212.0,
+        "p95": 212.0
+      },
+      "token_stats": {
+        "mean_tokens": 42.0,
+        "median_tokens": 42.0,
+        "p5_tokens": 42.0,
+        "p95_tokens": 42.0,
+        "vocab_size_estimate": 5
+      },
+      "empty_texts": 0
+    },
+    "val": {
+      "split": "val",
+      "total_rows": 20,
+      "fake_count": 10,
+      "real_count": 10,
+      "fake_pct": 50.0,
+      "real_pct": 50.0,
+      "text_length": {
+        "min": 212,
+        "max": 212,
+        "mean": 212.0,
+        "median": 212.0,
+        "p5": 212.0,
+        "p95": 212.0
+      },
+      "token_stats": {
+        "mean_tokens": 42.0,
+        "median_tokens": 42.0,
+        "p5_tokens": 42.0,
+        "p95_tokens": 42.0,
+        "vocab_size_estimate": 5
+      },
+      "empty_texts": 0
+    },
+    "test": {
+      "split": "test",
+      "total_rows": 20,
+      "fake_count": 10,
+      "real_count": 10,
+      "fake_pct": 50.0,
+      "real_pct": 50.0,
+      "text_length": {
+        "min": 212,
+        "max": 212,
+        "mean": 212.0,
+        "median": 212.0,
+        "p5": 212.0,
+        "p95": 212.0
+      },
+      "token_stats": {
+        "mean_tokens": 42.0,
+        "median_tokens": 42.0,
+        "p5_tokens": 42.0,
+        "p95_tokens": 42.0,
+        "vocab_size_estimate": 5
+      },
+      "empty_texts": 0
+    }
+  },
+  "deduplication": {
+    "exact_removed": 0,
+    "near_removed": 0,
+    "total_removed": 0
+  },
+  "leakage": {
+    "train_val_leakage": 0,
+    "train_test_leakage": 0
+  }
+}
