@@ -2,20 +2,22 @@
 Analysis service.
 
 Orchestrates the full analysis pipeline for every input type:
-  text  → clean → run ML → persist → return
-  url   → extract article → clean → run ML → persist → return
-  claim → combine with context → clean → run ML → persist → return
+  text  → clean → run ML + evidence → persist → return
+  url   → extract article → clean → run ML + evidence → persist → return
+  claim → combine with context → clean → run ML + evidence → persist → return
 
 Design rules
 ------------
 * No ML training here — only inference via ModelRegistry.
 * ML inference (CPU/GPU-bound) runs in asyncio thread-pool executor
   so it does not block the async event loop.
+* Evidence retrieval runs concurrently with ML inference.
 * Each analysis is persisted to PostgreSQL: one Analysis row +
-  one Prediction row per model.
+  one Prediction row per model + EvidenceSource rows.
 * Verdict is determined by weighted ensemble of available model outputs.
 * If all models are unavailable the service raises ModelUnavailableError
   (HTTP 503) — never returns a hardcoded prediction.
+* Evidence failure never blocks the analysis — it is logged and ignored.
 """
 
 from __future__ import annotations
@@ -31,11 +33,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.errors import ModelUnavailableError, ArticleExtractionError
+from app.evidence.evidence_service import retrieve_evidence
+from app.evidence.schema import EvidenceResult, EvidenceStatus
 from app.extraction.article_extractor import extract_article
 from app.ml.model_registry import get_registry
 from app.models.analysis import Analysis, InputType, AnalysisStatus, FinalVerdict
 from app.models.prediction import Prediction, PredictionLabel
 from app.models.model_version import ModelVersion
+from app.models.evidence_source import EvidenceSource, SourceType, EvidenceRelationship
 from app.schemas.analyze import AnalysisResponse, ModelPrediction
 
 logger = logging.getLogger(__name__)
@@ -192,8 +197,9 @@ async def _persist_analysis(
     db:             AsyncSession,
     analysis:       Analysis,
     predictions:    dict[str, dict],
+    evidence:       Optional[EvidenceResult] = None,
 ) -> Analysis:
-    """Save Prediction rows and update Analysis status/verdict in DB."""
+    """Save Prediction + EvidenceSource rows and update Analysis status/verdict in DB."""
     verdict, confidence = _compute_ensemble_verdict(predictions)
 
     analysis.final_verdict    = FinalVerdict(verdict)
@@ -221,6 +227,46 @@ async def _persist_analysis(
             real_probability=pred.get("real_probability", 0.5),
         )
         db.add(prediction_row)
+
+    # ── Persist evidence sources ──────────────────────────────────────────────
+    # Evidence belongs to the first (and only) Claim for this analysis.
+    # We create the Claim row if it doesn't exist yet.
+    if evidence and evidence.items:
+        from app.models.claim import Claim, ClaimVerdict
+        claim_row = Claim(
+            analysis_id=analysis.id,
+            claim_text=analysis.original_input[:2000],
+            position=1,
+            verdict=ClaimVerdict(verdict) if verdict in ("FAKE", "REAL", "UNVERIFIED", "MIXED") else ClaimVerdict.UNVERIFIED,
+            confidence=confidence,
+        )
+        db.add(claim_row)
+        await db.flush()
+
+        _src_type_map = {
+            "news_api":   SourceType.NEWS_API,
+            "gnews":      SourceType.NEWS_API,
+            "rss_feed":   SourceType.RSS_FEED,
+            "web_search": SourceType.WEB_SEARCH,
+        }
+
+        for rank, ev_item in enumerate(evidence.items, start=1):
+            src_type = _src_type_map.get(ev_item.source_type.value, SourceType.UNKNOWN)
+            from datetime import datetime, timezone
+            ev_row = EvidenceSource(
+                claim_id=claim_row.id,
+                source_name=ev_item.source_name[:200],
+                title=ev_item.title[:500],
+                url=ev_item.url[:2000],
+                snippet=(ev_item.description or "")[:500] or None,
+                source_type=src_type,
+                published_at=ev_item.published_at,
+                retrieved_at=ev_item.retrieved_at,
+                relevance_score=ev_item.relevance_score,
+                rank=rank,
+                relationship_to_claim=EvidenceRelationship.INCONCLUSIVE,
+            )
+            db.add(ev_row)
 
     return analysis
 
@@ -258,6 +304,25 @@ def _build_response(
     )
 
 
+async def _run_ml_and_evidence(
+    text: str, claim: str
+) -> tuple[dict[str, dict], Optional[EvidenceResult]]:
+    """Run ML inference and evidence retrieval concurrently."""
+    ml_coro  = _run_inference_async(text)
+    ev_coro  = _safe_retrieve_evidence(claim)
+    ml_result, ev_result = await asyncio.gather(ml_coro, ev_coro)
+    return ml_result, ev_result
+
+
+async def _safe_retrieve_evidence(claim: str) -> Optional[EvidenceResult]:
+    """Retrieve evidence without blocking the analysis if it fails."""
+    try:
+        return await retrieve_evidence(claim)
+    except Exception as exc:
+        logger.warning("Evidence retrieval failed (non-blocking): %s", exc)
+        return None
+
+
 # ── Public service functions ──────────────────────────────────────────────────
 
 async def analyse_text(
@@ -272,7 +337,7 @@ async def analyse_text(
 
     analysis = Analysis(
         input_type=InputType.TEXT,
-        original_input=combined[:2000],   # store first 2000 chars
+        original_input=combined[:2000],
         article_title=title,
         status=AnalysisStatus.PROCESSING,
     )
@@ -280,8 +345,8 @@ async def analyse_text(
     await db.flush()
 
     try:
-        predictions = await _run_inference_async(combined)
-        analysis = await _persist_analysis(db, analysis, predictions)
+        predictions, evidence = await _run_ml_and_evidence(combined, combined[:500])
+        analysis = await _persist_analysis(db, analysis, predictions, evidence)
         analysis.processing_time_ms = int((time.perf_counter() - t0) * 1000)
         return _build_response(analysis, predictions)
     except ModelUnavailableError:
@@ -315,11 +380,11 @@ async def analyse_url(
 
     combined = f"{article.title or ''} {article.text}".strip()
     analysis.article_title = article.title
-    analysis.article_text  = article.text[:10000]   # store up to 10k chars
+    analysis.article_text  = article.text[:10000]
 
     try:
-        predictions = await _run_inference_async(combined)
-        analysis = await _persist_analysis(db, analysis, predictions)
+        predictions, evidence = await _run_ml_and_evidence(combined, combined[:500])
+        analysis = await _persist_analysis(db, analysis, predictions, evidence)
         analysis.processing_time_ms = int((time.perf_counter() - t0) * 1000)
         return _build_response(analysis, predictions)
     except ModelUnavailableError:
@@ -347,8 +412,9 @@ async def analyse_claim(
     await db.flush()
 
     try:
-        predictions = await _run_inference_async(combined)
-        analysis = await _persist_analysis(db, analysis, predictions)
+        # For claims, use the raw claim (not context) as the evidence query
+        predictions, evidence = await _run_ml_and_evidence(combined, claim)
+        analysis = await _persist_analysis(db, analysis, predictions, evidence)
         analysis.processing_time_ms = int((time.perf_counter() - t0) * 1000)
         return _build_response(analysis, predictions)
     except ModelUnavailableError:
