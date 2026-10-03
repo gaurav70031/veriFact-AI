@@ -1,10 +1,22 @@
 """
 Request and response schemas for the /api/analyze endpoints.
 
-Three input types are supported:
-  POST /api/analyze/text  — raw text or claim
-  POST /api/analyze/url   — public article URL
-  POST /api/analyze/claim — short factual claim with optional context
+Response design
+---------------
+The response deliberately separates two independent assessments:
+
+  ml_verdict        — What the ML models predict (FAKE/REAL/UNVERIFIED/MIXED).
+                      Derived from model probability scores only.
+                      High confidence does NOT mean factual correctness.
+
+  evidence_verdict  — What the evidence search found
+                      (LIKELY_CREDIBLE / LIKELY_MISLEADING / CONTRADICTED /
+                       UNVERIFIED / INSUFFICIENT_EVIDENCE).
+                      Based on actual retrieved sources.
+                      INSUFFICIENT_EVIDENCE ≠ false.
+
+Both verdicts are always present in the response so clients can display
+them together and explain the distinction to users.
 """
 
 from __future__ import annotations
@@ -15,7 +27,9 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
-# ── Request schemas ───────────────────────────────────────────────────────────
+# =============================================================================
+# Request schemas
+# =============================================================================
 
 class AnalyzeTextRequest(BaseModel):
     """Submit raw article text or a multi-sentence claim for analysis."""
@@ -90,46 +104,152 @@ class AnalyzeClaimRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
-# ── Per-model prediction sub-schema ──────────────────────────────────────────
+# =============================================================================
+# Response sub-schemas
+# =============================================================================
 
 class ModelPrediction(BaseModel):
-    """Result from a single ML model."""
-
-    model_id:         str
-    model_name:       str
-    label:            str            # "FAKE" | "REAL"
-    is_fake:          bool
-    confidence:       float          # 0.0–1.0
-    fake_probability: float
-    real_probability: float
+    """
+    Result from a single ML model.
+    This is a probability-based prediction, NOT a factual determination.
+    """
+    model_id:          str
+    model_name:        str
+    label:             str    # "FAKE" | "REAL"
+    is_fake:           bool
+    confidence:        float  # max(fake_prob, real_prob)
+    fake_probability:  float
+    real_probability:  float
     inference_time_ms: float
 
 
-# ── Analysis response schemas ─────────────────────────────────────────────────
+class EvidenceSourceResult(BaseModel):
+    """
+    One evidence source as returned in the API response.
+    Full article text is never included — only metadata and a short snippet.
+    """
+    source_name:          str
+    title:                str
+    url:                  str
+    snippet:              Optional[str]         # ≤ 500 chars
+    source_type:          str                   # "news_api" | "rss_feed" | etc.
+    published_at:         Optional[datetime]
+    retrieved_at:         datetime
+    relevance_score:      float                 # keyword+recency score from ranker
+    comparison_score:     float                 # semantic/lexical similarity to claim
+    rank:                 int
+    relationship_to_claim: str                  # "supporting" | "contradicting" | ...
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ClaimResult(BaseModel):
+    """
+    Full assessment for one extracted claim.
+
+    Contains BOTH the ML-derived verdict AND the evidence-based assessment
+    so clients can display and explain them independently.
+    """
+    position:    int
+    claim_text:  str
+
+    # ── ML-derived ────────────────────────────────────────────────────────────
+    ml_verdict:   Optional[str]   # "FAKE" | "REAL" | "UNVERIFIED" | "MIXED"
+    ml_confidence: Optional[float]
+
+    # ── Evidence-based (separate from ML) ────────────────────────────────────
+    evidence_verdict: Optional[str]   # "LIKELY_CREDIBLE" | "CONTRADICTED" | etc.
+    evidence_explanation: Optional[str]
+
+    # ── Evidence items ────────────────────────────────────────────────────────
+    evidence_sources:    list[EvidenceSourceResult] = []
+
+    # ── Evidence summary counts ───────────────────────────────────────────────
+    supporting_count:    int = 0
+    contradicting_count: int = 0
+    inconclusive_count:  int = 0
+    not_relevant_count:  int = 0
+    total_evidence:      int = 0
+
+    # ── Conflict flag ─────────────────────────────────────────────────────────
+    # True when ML and evidence assessments disagree significantly
+    assessment_conflict: bool = False
+
+    # ── Limitations ───────────────────────────────────────────────────────────
+    evidence_limitations: list[str] = []
+
+
+class EvidenceSummary(BaseModel):
+    """
+    Aggregate evidence statistics across all claims in the analysis.
+    Always present even when no evidence was found.
+    """
+    total_evidence:      int
+    supporting_count:    int
+    contradicting_count: int
+    inconclusive_count:  int
+    not_relevant_count:  int
+    providers_used:      list[str]
+    providers_failed:    list[str]
+    evidence_limitations: list[str]
+
+    # Whether absence of evidence was due to provider failure vs true no-results
+    all_providers_failed: bool = False
+
+
+# =============================================================================
+# Full analysis response
+# =============================================================================
 
 class AnalysisResponse(BaseModel):
     """
-    Full analysis result returned by all three /api/analyze/* endpoints.
+    Complete analysis response.
+
+    Two independent assessments are always returned:
+
+    1. ml_verdict / ml_confidence
+       — Ensemble output of TF-IDF models and/or DistilBERT.
+       — High confidence means the text pattern matches known fake/real patterns.
+       — Does NOT verify the factual content of any claim.
+
+    2. evidence_verdict (per claim and overall)
+       — Based on retrieved news/RSS/search evidence.
+       — INSUFFICIENT_EVIDENCE means not enough was found, NOT that it's false.
+       — CONTRADICTED means multiple independent sources dispute a claim.
+
+    The claims list contains the full per-claim breakdown.
     """
 
-    id:               int
-    input_type:       str            # "text" | "url" | "claim"
-    original_input:   str
-    source_url:       Optional[str]
-    article_title:    Optional[str]
+    id:             int
+    input_type:     str          # "text" | "url" | "claim"
+    original_input: str
+    source_url:     Optional[str]
+    article_title:  Optional[str]
 
-    # Final verdict (ensemble)
-    final_verdict:    str            # "FAKE" | "REAL" | "UNVERIFIED" | "MIXED"
-    final_confidence: Optional[float]
-    summary:          Optional[str]
+    # ── ML assessment ─────────────────────────────────────────────────────────
+    ml_verdict:    str           # "FAKE" | "REAL" | "UNVERIFIED" | "MIXED"
+    ml_confidence: Optional[float]
 
-    # Per-model breakdown
+    # ── Evidence-based assessment ─────────────────────────────────────────────
+    evidence_verdict: Optional[str]  # "LIKELY_CREDIBLE" | "CONTRADICTED" | etc.
+    evidence_explanation: Optional[str]
+
+    # ── Per-model ML breakdown ────────────────────────────────────────────────
     model_predictions: list[ModelPrediction]
 
-    # Metadata
-    status:           str
+    # ── Per-claim breakdown (includes evidence per claim) ─────────────────────
+    claims: list[ClaimResult] = []
+
+    # ── Aggregate evidence summary ────────────────────────────────────────────
+    evidence_summary: Optional[EvidenceSummary] = None
+
+    # ── Legacy field: plain-text summary (kept for backwards compat) ──────────
+    summary: Optional[str] = None
+
+    # ── Metadata ──────────────────────────────────────────────────────────────
+    status:             str
     processing_time_ms: Optional[int]
-    created_at:       datetime
+    created_at:         datetime
 
     model_config = ConfigDict(from_attributes=True)
 
