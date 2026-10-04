@@ -2,7 +2,7 @@
 History service.
 
 Retrieves analysis records from PostgreSQL with pagination and filtering.
-All queries are async via SQLAlchemy 2.x.
+User ownership is enforced: authenticated users only see their own analyses.
 """
 
 from __future__ import annotations
@@ -29,10 +29,18 @@ from app.models.model_version import ModelVersion
 logger = logging.getLogger(__name__)
 
 
-async def get_analysis_by_id(db: AsyncSession, analysis_id: int) -> AnalysisResponse:
+async def get_analysis_by_id(
+    db:          AsyncSession,
+    analysis_id: int,
+    user_id:     Optional[int] = None,
+) -> AnalysisResponse:
     """
-    Fetch a single analysis with all its model predictions, claims, and evidence.
-    Raises NotFoundError if the record does not exist.
+    Fetch a single analysis.
+
+    Ownership check: if user_id is provided, the analysis must belong to
+    that user (or must be anonymous with user_id=NULL).  If the analysis
+    belongs to a different user, raise NotFoundError (same as missing —
+    avoids leaking existence of other users' analyses).
     """
     result = await db.execute(
         select(Analysis).where(Analysis.id == analysis_id)
@@ -40,7 +48,12 @@ async def get_analysis_by_id(db: AsyncSession, analysis_id: int) -> AnalysisResp
     analysis = result.scalar_one_or_none()
 
     if analysis is None:
-        raise NotFoundError(f"Analysis with id={analysis_id} not found.")
+        raise NotFoundError(f"Analysis {analysis_id} not found.")
+
+    # Ownership: if a user_id is provided, they may only access their own
+    # analyses (or public/anonymous ones).
+    if user_id is not None and analysis.user_id is not None and analysis.user_id != user_id:
+        raise NotFoundError(f"Analysis {analysis_id} not found.")
 
     # Fetch predictions
     pred_result = await db.execute(
@@ -161,22 +174,20 @@ async def get_history(
     page_size:  int           = 20,
     verdict:    Optional[str] = None,
     input_type: Optional[str] = None,
+    user_id:    Optional[int] = None,
 ) -> PaginatedHistory:
     """
-    Fetch paginated analysis history with optional filters.
+    Fetch paginated analysis history.
 
-    Parameters
-    ----------
-    page       : 1-based page number.
-    page_size  : Records per page (max 100).
-    verdict    : Optional filter: FAKE | REAL | UNVERIFIED | MIXED.
-    input_type : Optional filter: text | url | claim.
-
-    Returns
-    -------
-    PaginatedHistory with items, total, page, page_size, total_pages.
+    When user_id is provided (authenticated request) only that user's
+    analyses are returned.  Anonymous analyses (user_id=NULL) are only
+    visible to admins or when user_id is not specified.
     """
     filters = []
+
+    # ── User ownership filter ────────────────────────────────────────────────
+    if user_id is not None:
+        filters.append(Analysis.user_id == user_id)
 
     if verdict:
         try:

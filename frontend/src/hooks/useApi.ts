@@ -4,6 +4,9 @@ import type {
   AnalyzeTextRequest,
   AnalyzeUrlRequest,
   AnalyzeClaimRequest,
+  NewsSearchParams,
+  RegisterRequest,
+  LoginRequest,
 } from '@/types/api'
 
 // ── Query keys ────────────────────────────────────────────────────────────────
@@ -139,8 +142,6 @@ export function useSearchEvidence() {
 
 // ── Live news search (GET — URL-shareable) ────────────────────────────────────
 
-import type { NewsSearchParams } from '@/types/api'
-
 export function useNewsSearch(params: NewsSearchParams | null) {
   return useQuery({
     queryKey: ['news-search', params],
@@ -150,4 +151,20 @@ export function useNewsSearch(params: NewsSearchParams | null) {
     gcTime:    5 * 60_000,
     retry:     1,
   })
+}
+
+// ── Auth mutations ─────────────────────────────────────────────────────────────
+// These wrap the API calls but AuthContext is the source of truth for user state.
+// Use useAuth() directly for login/logout in components.
+
+export function useLoginMutation() {
+  return useMutation({ mutationFn: (body: LoginRequest) => api.authLogin(body) })
+}
+
+export function useRegisterMutation() {
+  return useMutation({ mutationFn: (body: RegisterRequest) => api.authRegister(body) })
+}
+
+export function useLogoutMutation() {
+  return useMutation({ mutationFn: api.authLogout })
 }

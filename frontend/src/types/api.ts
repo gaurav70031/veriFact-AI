@@ -294,3 +294,32 @@ export interface ApiError {
   message: string
   detail?: unknown
 }
+
+// ── Authentication ────────────────────────────────────────────────────────────
+
+export interface RegisterRequest {
+  email:     string
+  username:  string
+  password:  string
+  full_name?: string
+}
+
+export interface LoginRequest {
+  email:    string
+  password: string
+}
+
+export interface UserOut {
+  id:        number
+  email:     string
+  username:  string
+  full_name: string | null
+  role:      'user' | 'analyst' | 'admin'
+  is_active: boolean
+  created_at: string
+}
+
+export interface AuthResponse {
+  user:    UserOut
+  message: string
+}

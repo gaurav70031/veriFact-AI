@@ -689,9 +689,10 @@ async def _run_full_pipeline(
 # =============================================================================
 
 async def analyse_text(
-    db:    AsyncSession,
-    text:  str,
-    title: Optional[str] = None,
+    db:      AsyncSession,
+    text:    str,
+    title:   Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> AnalysisResponse:
     combined = f"{title} {text}".strip() if title else text
     analysis = Analysis(
@@ -699,6 +700,7 @@ async def analyse_text(
         original_input=combined[:2000],
         article_title=title,
         status=AnalysisStatus.PROCESSING,
+        user_id=user_id,
     )
     db.add(analysis)
     await db.flush()
@@ -714,12 +716,14 @@ async def analyse_text(
 
 
 async def analyse_url(
-    db:  AsyncSession,
-    url: str,
+    db:      AsyncSession,
+    url:     str,
+    user_id: Optional[int] = None,
 ) -> AnalysisResponse:
     analysis = Analysis(
         input_type=InputType.URL, original_input=url,
         source_url=url, status=AnalysisStatus.PROCESSING,
+        user_id=user_id,
     )
     db.add(analysis)
     await db.flush()
@@ -749,12 +753,14 @@ async def analyse_claim(
     db:      AsyncSession,
     claim:   str,
     context: Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> AnalysisResponse:
     combined = f"{claim} {context or ''}".strip()
     analysis = Analysis(
         input_type=InputType.TEXT,
         original_input=claim[:500],
         status=AnalysisStatus.PROCESSING,
+        user_id=user_id,
     )
     db.add(analysis)
     await db.flush()

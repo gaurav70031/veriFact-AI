@@ -14,6 +14,10 @@ import type {
   EvidenceSearchResult,
   NewsSearchParams,
   NewsSearchResult,
+  RegisterRequest,
+  LoginRequest,
+  AuthResponse,
+  UserOut,
 } from '@/types/api'
 
 // ── Analysis ──────────────────────────────────────────────────────────────────
@@ -84,3 +88,17 @@ export const searchNews = (params: NewsSearchParams) =>
   apiClient
     .get<NewsSearchResult>('/news/search', { params })
     .then((r) => r.data)
+
+// ── Authentication ────────────────────────────────────────────────────────────
+
+export const authRegister = (body: RegisterRequest) =>
+  apiClient.post<AuthResponse>('/auth/register', body).then((r) => r.data)
+
+export const authLogin = (body: LoginRequest) =>
+  apiClient.post<AuthResponse>('/auth/login', body).then((r) => r.data)
+
+export const authLogout = () =>
+  apiClient.post<{ message: string }>('/auth/logout').then((r) => r.data)
+
+export const authMe = () =>
+  apiClient.get<UserOut>('/auth/me').then((r) => r.data)

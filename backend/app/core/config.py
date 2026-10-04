@@ -87,6 +87,19 @@ class Settings(BaseSettings):
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = "INFO"
 
+    # ── JWT Authentication ────────────────────────────────────────────────────
+    # SECURITY: Override SECRET_KEY with a strong random value in production.
+    # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    # Never commit the actual secret — use environment variables only.
+    jwt_algorithm:               str  = "HS256"
+    access_token_expire_minutes: int  = 30
+    refresh_token_expire_days:   int  = 7
+
+    # httpOnly cookie settings
+    cookie_name:     str  = "access_token"
+    cookie_secure:   bool = False   # True in production (requires HTTPS)
+    cookie_samesite: str  = "lax"   # "none" + secure=True for cross-site prod
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
