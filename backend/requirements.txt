@@ -50,3 +50,7 @@ python-dotenv==1.0.1
 python-jose[cryptography]==3.3.0  # JWT encode/decode (HS256)
 passlib[bcrypt]==1.7.4             # password hashing context
 bcrypt==4.1.3                      # bcrypt backend for passlib
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+aiosqlite==0.22.1          # async SQLite for in-memory DB tests (no PostgreSQL needed)
+pytest-httpx==0.36.2       # mock httpx clients for URL extraction / evidence tests
