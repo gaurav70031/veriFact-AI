@@ -136,3 +136,18 @@ export function useSearchEvidence() {
     mutationFn: api.searchEvidence,
   })
 }
+
+// ── Live news search (GET — URL-shareable) ────────────────────────────────────
+
+import type { NewsSearchParams } from '@/types/api'
+
+export function useNewsSearch(params: NewsSearchParams | null) {
+  return useQuery({
+    queryKey: ['news-search', params],
+    queryFn:  () => api.searchNews(params!),
+    enabled:  params !== null && params.q.trim().length >= 3,
+    staleTime: 2 * 60_000,   // 2 min — news results go stale quickly
+    gcTime:    5 * 60_000,
+    retry:     1,
+  })
+}

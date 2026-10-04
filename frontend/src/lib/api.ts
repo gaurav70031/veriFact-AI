@@ -12,6 +12,8 @@ import type {
   ExplanationResponse,
   EvidenceSearchRequest,
   EvidenceSearchResult,
+  NewsSearchParams,
+  NewsSearchResult,
 } from '@/types/api'
 
 // ── Analysis ──────────────────────────────────────────────────────────────────
@@ -74,3 +76,11 @@ export const searchEvidence = (body: EvidenceSearchRequest) =>
 
 export const getEvidenceForAnalysis = (analysisId: number) =>
   apiClient.get(`/evidence/${analysisId}`).then((r) => r.data)
+
+// ── Live news (GET /api/v1/news/search) ───────────────────────────────────────
+// Frontend never calls news APIs directly — all requests go through this proxy.
+
+export const searchNews = (params: NewsSearchParams) =>
+  apiClient
+    .get<NewsSearchResult>('/news/search', { params })
+    .then((r) => r.data)

@@ -277,6 +277,16 @@ export interface EvidenceSearchResult {
   items: EvidenceItem[]
 }
 
+// ── Live news search (GET /api/v1/news/search) ────────────────────────────────
+// Same response shape as EvidenceSearchResult — aliased for clarity.
+export type NewsSearchResult = EvidenceSearchResult
+
+export interface NewsSearchParams {
+  q: string
+  from_days?: number
+  max_results?: number
+}
+
 // ── API error ─────────────────────────────────────────────────────────────────
 
 export interface ApiError {
