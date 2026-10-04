@@ -6,6 +6,7 @@ python-multipart==0.0.9       # required for form data / file uploads
 # ── Validation & settings ─────────────────────────────────────────────────────
 pydantic==2.7.1
 pydantic-settings==2.2.1
+email-validator==2.1.1       # required by pydantic EmailStr in auth schemas
 
 # ── Database ──────────────────────────────────────────────────────────────────
 sqlalchemy==2.0.30

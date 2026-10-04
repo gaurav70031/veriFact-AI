@@ -40,8 +40,14 @@ from app.core.config import get_settings
 settings = get_settings()
 
 # ── Password hashing ──────────────────────────────────────────────────────────
+# passlib 1.7.4 tries to read bcrypt.__about__.__version__ which no longer
+# exists in bcrypt >= 4.0.  The warning "(trapped) error reading bcrypt version"
+# is cosmetic — hashing and verification work correctly.  We suppress it here.
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import warnings as _warnings
+with _warnings.catch_warnings():
+    _warnings.simplefilter("ignore")
+    _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(plaintext: str) -> str:

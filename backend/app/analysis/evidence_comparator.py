@@ -124,14 +124,36 @@ def _contradiction_signal(snippet: str) -> float:
 
 
 # ── Sentence-transformer upgrade ──────────────────────────────────────────────
+# sentence-transformers is OPTIONAL. When the model is not already cached
+# locally it attempts to download from HuggingFace Hub, which blocks the
+# event loop and fails in offline environments.
+#
+# Enable it only when SENTENCE_TRANSFORMERS_ENABLED=true is set in the
+# environment AND the model is already present in the HuggingFace cache.
+# Without this flag the comparator always uses the fast lexical fallback.
+
+import os as _os
 
 @lru_cache(maxsize=1)
 def _load_sentence_transformer():
-    """Load the sentence transformer model (cached — loaded once per process)."""
+    """Load the sentence transformer model (cached — loaded once per process).
+
+    Returns None when:
+      - SENTENCE_TRANSFORMERS_ENABLED env var is not 'true'
+      - sentence_transformers package is not installed
+      - Model download would be required (to avoid blocking in production)
+    """
+    if _os.getenv('SENTENCE_TRANSFORMERS_ENABLED', '').lower() != 'true':
+        return None
     try:
         from sentence_transformers import SentenceTransformer
-        return SentenceTransformer("all-MiniLM-L6-v2")
+        # local_files_only=True prevents any network call.
+        # If the model isn't cached, this raises an exception — caught below.
+        return SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
     except ImportError:
+        return None
+    except Exception:
+        # Model not cached locally — fall back to lexical comparison
         return None
 
 
