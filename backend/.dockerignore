@@ -1,0 +1,39 @@
+# Don't copy these into the Docker image
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Tests (not needed at runtime)
+tests/
+integration_check.py
+
+# Development files
+.env
+.env.*
+*.local
+
+# Git
+.git/
+.gitignore
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Logs
+*.log
+logs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

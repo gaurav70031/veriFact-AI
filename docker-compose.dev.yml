@@ -1,0 +1,58 @@
+# =============================================================================
+# Development overrides for docker-compose.yml
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Differences from production:
+#   - Backend runs with --reload (hot-reload on code change)
+#   - Source code is mounted live (no rebuild needed for Python changes)
+#   - Single worker (easier to debug)
+#   - DEBUG=true
+#   - Frontend runs Vite dev server instead of nginx
+# =============================================================================
+
+version: "3.9"
+
+services:
+  backend:
+    build:
+      target: runtime
+    volumes:
+      # Mount source code live — Python changes take effect on next request
+      - ./backend:/app
+      - ./ml:/app/ml
+    environment:
+      DEBUG: "true"
+      LOG_LEVEL: DEBUG
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+      - --workers
+      - "1"
+      - --log-level
+      - debug
+
+  frontend:
+    # Replace the nginx container with Vite dev server for hot reload
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules    # don't mount host node_modules over container's
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    ports:
+      - "5173:5173"
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5173"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

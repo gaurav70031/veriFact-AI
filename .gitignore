@@ -48,6 +48,8 @@ logs/
 
 # Docker
 docker/secrets/
+docker/*.env
+*.env.production
 
 # Database
 *.sqlite

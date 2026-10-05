@@ -1,56 +1,175 @@
+# =============================================================================
+# VeritasAI — Docker Compose (development + local production)
+#
+# Services:
+#   postgres  — PostgreSQL 15 database
+#   backend   — FastAPI application (Python 3.11)
+#   frontend  — React SPA served by nginx
+#
+# Usage:
+#   cp .env.example .env          # fill in secrets
+#   docker compose up --build     # first start
+#   docker compose up -d          # detached
+#   docker compose down -v        # stop + delete volumes
+#
+# See docs/SETUP.md for the full guide.
+# =============================================================================
+
 version: "3.9"
 
+# ── Shared healthcheck defaults ───────────────────────────────────────────────
+x-healthcheck-defaults: &healthcheck-defaults
+  interval:     30s
+  timeout:      10s
+  start_period: 30s
+  retries:      5
+
+# ── Shared restart policy ─────────────────────────────────────────────────────
+x-restart: &restart
+  restart: unless-stopped
+
 services:
-  db:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
     image: postgres:15-alpine
-    container_name: fakenews_db
-    restart: unless-stopped
+    container_name: fakenews_postgres
+    <<: *restart
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Tune for development. Override with postgres.conf for production.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
+      # Persistent data volume
       - postgres_data:/var/lib/postgresql/data
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      # One-time init script (creates extensions; schema handled by Alembic)
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      <<: *healthcheck-defaults
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -q"
+    networks:
+      - internal
 
-  redis:
-    image: redis:7-alpine
-    container_name: fakenews_redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-
+  # ── Backend ─────────────────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: runtime            # build the final stage, not builder
     container_name: fakenews_backend
-    restart: unless-stopped
-    env_file:
-      - .env
-    ports:
-      - "8000:8000"
+    <<: *restart
+    # Secrets come from .env — never embedded in the image
+    environment:
+      # Application
+      APP_ENV:           ${APP_ENV:-development}
+      SECRET_KEY:        ${SECRET_KEY}
+      DEBUG:             ${DEBUG:-false}
+      LOG_LEVEL:         ${LOG_LEVEL:-INFO}
+      # Database
+      POSTGRES_HOST:     postgres          # Docker network alias
+      POSTGRES_PORT:     5432
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Auth cookies
+      COOKIE_SECURE:     ${COOKIE_SECURE:-false}
+      COOKIE_SAMESITE:   ${COOKIE_SAMESITE:-lax}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      # CORS — frontend URL(s) allowed to make credentialed requests
+      ALLOWED_ORIGINS:   ${ALLOWED_ORIGINS:-http://localhost:80,http://localhost:3000,http://localhost:5173}
+      # Evidence / news APIs (keys stay in .env — not in this file)
+      NEWSAPI_KEY:       ${NEWSAPI_KEY:-}
+      GNEWS_API_KEY:     ${GNEWS_API_KEY:-}
+      SERPAPI_KEY:       ${SERPAPI_KEY:-}
+      BRAVE_SEARCH_KEY:  ${BRAVE_SEARCH_KEY:-}
+      SEARCH_PROVIDER:   ${SEARCH_PROVIDER:-serpapi}
+      RSS_FEED_URLS:     ${RSS_FEED_URLS:-}
+      # Sentence transformers (off by default — model download required)
+      SENTENCE_TRANSFORMERS_ENABLED: ${SENTENCE_TRANSFORMERS_ENABLED:-false}
+      # NLTK data location
+      NLTK_DATA: /app/nltk_data
     volumes:
-      - ./backend:/app
-      - ./ml:/app/ml
+      # ML model artifacts — mounted read-only into the container.
+      # Train models on the host first: python scripts/train_baseline.py
+      - ./ml:/app/ml:ro
+      # Alembic migrations (so the entrypoint can run alembic upgrade head)
+      - ./backend/alembic:/app/alembic:ro
+      - ./backend/alembic.ini:/app/alembic.ini:ro
+    entrypoint: ["/app/docker/entrypoint.sh"]
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --workers
+      - "2"
+      - --log-level
+      - "info"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
     depends_on:
-      - db
-      - redis
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-defaults
+      test:
+        - "CMD"
+        - "curl"
+        - "-f"
+        - "http://localhost:8000/api/v1/health"
+    networks:
+      - internal
+      - public
 
+  # ── Frontend ─────────────────────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: runtime
+      args:
+        # /api/v1 → nginx proxies to backend container (no CORS needed)
+        VITE_API_BASE_URL: /api/v1
     container_name: fakenews_frontend
-    restart: unless-stopped
-    env_file:
-      - .env
+    <<: *restart
     ports:
-      - "5173:5173"
+      - "${FRONTEND_PORT:-80}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-defaults
+      test:
+        - "CMD"
+        - "wget"
+        - "-q"
+        - "--spider"
+        - "http://localhost/nginx-health"
+    networks:
+      - public
 
+# ── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
   postgres_data:
+    driver: local
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  # internal: postgres ↔ backend (not exposed to host unless via port mapping)
+  internal:
+    driver: bridge
+    internal: true
+  # public: frontend ↔ backend (exposed via port mapping)
+  public:
+    driver: bridge
