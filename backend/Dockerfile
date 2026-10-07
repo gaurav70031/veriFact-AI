@@ -1,7 +1,6 @@
 # =============================================================================
-# Backend Dockerfile
-# Build context: PROJECT ROOT (not backend/)
-# This allows ml/ to be copied into the image alongside the backend code.
+# Backend Dockerfile — build context is ./backend/
+# ml/ is copied into backend/ml/ so it's available in the build context
 # =============================================================================
 
 # ── Stage 1: dependency builder ───────────────────────────────────────────────
@@ -16,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY backend/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir -r requirements.txt
 
@@ -38,11 +37,8 @@ RUN groupadd --gid 1001 appgroup \
 
 WORKDIR /app
 
-# Copy backend source
-COPY --chown=appuser:appgroup backend/ .
-
-# Copy ml/ package from project root so model_registry can import it
-COPY --chown=appuser:appgroup ml/ ./ml/
+# Copy backend app source
+COPY --chown=appuser:appgroup . .
 
 RUN chmod +x /app/docker/entrypoint.sh
 

@@ -21,7 +21,7 @@ services:
     name: verifact-backend
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
-    dockerContext: .
+    dockerContext: ./backend
     region: singapore
     plan: free           # 512 MB RAM, spins down after 15 min idle
     healthCheckPath: /api/v1/health

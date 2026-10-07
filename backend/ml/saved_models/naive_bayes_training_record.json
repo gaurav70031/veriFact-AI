@@ -1,0 +1,23 @@
+{
+  "model_id": "naive_bayes",
+  "algorithm": "MultinomialNB",
+  "vectorizer": "TfidfVectorizer",
+  "train_samples": 160,
+  "val_samples": 20,
+  "train_time_s": 0.014,
+  "random_seed": 42,
+  "hyperparameters": {
+    "alpha": 0.1
+  },
+  "tfidf_params": {
+    "max_features": 50000,
+    "ngram_range": [
+      1,
+      2
+    ],
+    "sublinear_tf": true,
+    "min_df": 2,
+    "max_df": 0.95
+  },
+  "artifact_path": "C:\\Users\\gaura\\Desktop\\fake news detection project\\fake-news-detection\\ml\\saved_models\\nb_pipeline.pkl"
+}
