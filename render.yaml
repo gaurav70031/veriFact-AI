@@ -67,7 +67,7 @@ services:
 
       # ── CORS — set to your Vercel frontend URL ────────────────────────────
       - key: ALLOWED_ORIGINS
-        value: https://your-app.vercel.app   # CHANGE THIS after Vercel deploy
+        value: https://your-app.vercel.app   # UPDATE after Vercel deploy
 
       # ── News API keys — paste in Render dashboard ────────────────────────
       - key: NEWSAPI_KEY
