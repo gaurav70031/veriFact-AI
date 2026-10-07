@@ -24,7 +24,21 @@ async def get_stats(db: AsyncSession) -> StatsResponse:
     """
     Compute aggregate analysis statistics from actual database records.
     Returns real counts, percentages, and averages — nothing hardcoded.
+    Falls back to zero values if any query fails.
     """
+    try:
+        return await _get_stats_inner(db)
+    except Exception as exc:
+        logger.error("Stats query failed: %s", exc, exc_info=True)
+        return StatsResponse(
+            total_analyses=0, completed=0, failed=0, pending=0,
+            verdict_counts=VerdictCounts(FAKE=0, REAL=0, UNVERIFIED=0, MIXED=0),
+            fake_percentage=0.0, real_percentage=0.0,
+            avg_confidence=0.0, avg_processing_ms=0.0,
+        )
+
+
+async def _get_stats_inner(db: AsyncSession) -> StatsResponse:
     # Total analyses
     total_result = await db.execute(select(func.count(Analysis.id)))
     total = total_result.scalar_one() or 0
@@ -65,7 +79,11 @@ async def get_stats(db: AsyncSession) -> StatsResponse:
         .group_by(Analysis.final_verdict)
     )
     verdict_rows = verdict_result.all()
-    verdict_map  = {row[0].value: row[1] for row in verdict_rows if row[0]}
+    verdict_map: dict[str, int] = {}
+    for row in verdict_rows:
+        if row[0] is not None:
+            key = row[0].value if hasattr(row[0], "value") else str(row[0])
+            verdict_map[key] = row[1]
 
     fake_count       = verdict_map.get("FAKE",       0)
     real_count       = verdict_map.get("REAL",       0)
