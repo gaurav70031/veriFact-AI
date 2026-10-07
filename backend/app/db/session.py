@@ -25,9 +25,9 @@ engine: AsyncEngine = create_async_engine(
     settings.database_url,
     echo=settings.debug,
     pool_pre_ping=True,
-    pool_recycle=1800,
-    pool_size=10,
-    max_overflow=20,
+    pool_recycle=300,
+    pool_size=2,        # Render free tier PostgreSQL has very limited connections
+    max_overflow=3,     # max 5 total connections
 )
 
 AsyncSessionLocal = async_sessionmaker(
