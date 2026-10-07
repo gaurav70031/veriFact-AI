@@ -1,6 +1,7 @@
 # =============================================================================
-# Backend Dockerfile — multi-stage, production-ready
-# Render-compatible: no network calls during build
+# Backend Dockerfile
+# Build context: PROJECT ROOT (not backend/)
+# This allows ml/ to be copied into the image alongside the backend code.
 # =============================================================================
 
 # ── Stage 1: dependency builder ───────────────────────────────────────────────
@@ -8,61 +9,43 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
-# System libraries for compiling Python packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc \
-    libpq-dev \
-    libxml2-dev \
-    libxslt1-dev \
-    curl \
+    build-essential gcc libpq-dev libxml2-dev libxslt1-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir -r requirements.txt
 
-# NOTE: NLTK data is downloaded at runtime (first startup), not at build time.
-# Render's build environment blocks outbound network during docker build.
-# The entrypoint.sh downloads NLTK data before starting uvicorn.
 
-
-# ── Stage 2: production runtime ───────────────────────────────────────────────
+# ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
 LABEL org.opencontainers.image.title="VeriFact AI Backend"
-LABEL org.opencontainers.image.description="Fake News Detection — FastAPI backend"
 
-# Runtime system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev \
-    libxml2 \
-    libxslt1.1 \
-    curl \
+    libpq-dev libxml2 libxslt1.1 curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy venv from builder
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Non-root user
 RUN groupadd --gid 1001 appgroup \
  && useradd  --uid 1001 --gid appgroup --no-create-home appuser
 
 WORKDIR /app
 
-# Copy app source
-COPY --chown=appuser:appgroup . .
+# Copy backend source
+COPY --chown=appuser:appgroup backend/ .
 
-# Make entrypoint executable
+# Copy ml/ package from project root so model_registry can import it
+COPY --chown=appuser:appgroup ml/ ./ml/
+
 RUN chmod +x /app/docker/entrypoint.sh
 
-# Create dirs the app writes to
 RUN mkdir -p ml/saved_models logs \
  && chown -R appuser:appgroup /app
 
