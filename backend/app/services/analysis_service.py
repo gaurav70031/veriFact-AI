@@ -131,7 +131,7 @@ def _compute_ensemble_verdict(
 async def _run_inference_async(text: str) -> dict[str, dict]:
     registry = get_registry()
     results: dict[str, dict] = {}
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     if registry._baseline_ready:
         try:
@@ -201,7 +201,7 @@ async def _generate_explanations(
     predictions: dict[str, dict],
 ) -> dict[str, ExplanationResult]:
     """Async wrapper — runs synchronous explainers in thread-pool."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(
             None,
@@ -218,7 +218,9 @@ async def _generate_explanations(
 
 async def _safe_retrieve_evidence(claim: str) -> Optional[EvidenceResult]:
     try:
-        return await retrieve_evidence(claim)
+        # Use a 90-day window so recent political/news events aren't missed,
+        # and request more results so the relevance filter has more to work with.
+        return await retrieve_evidence(claim, max_results=15, from_days=90)
     except Exception as exc:
         logger.warning("Evidence retrieval failed for '%s…': %s", claim[:60], exc)
         return None
@@ -597,7 +599,7 @@ async def _run_full_pipeline(
     t0 = time.perf_counter()
 
     # ── Step 1: ML inference + claim extraction ───────────────────────────────
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ml_coro     = _run_inference_async(full_text)
     claims_coro = loop.run_in_executor(
         None, lambda: extract_claims(full_text, max_claims=max_claims)
@@ -757,7 +759,7 @@ async def analyse_claim(
 ) -> AnalysisResponse:
     combined = f"{claim} {context or ''}".strip()
     analysis = Analysis(
-        input_type=InputType.TEXT,
+        input_type=InputType.QUERY,
         original_input=claim[:500],
         status=AnalysisStatus.PROCESSING,
         user_id=user_id,

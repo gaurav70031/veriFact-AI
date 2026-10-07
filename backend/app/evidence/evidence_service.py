@@ -47,30 +47,46 @@ def _compute_relevance(item: EvidenceItem, keywords: list[str]) -> float:
 
     Factors
     -------
-    keyword_overlap : fraction of query keywords that appear in title + description
-    recency_boost   : exponential decay — articles published today score highest
-    """
-    text = f"{item.title} {item.description or ''}".lower()
+    keyword_overlap : fraction of query keywords that appear in title + description.
+                      Title matches count double — the title is the most signal-dense
+                      part of a news article.
+    entity_bonus    : multi-word proper noun phrases that appear verbatim score higher.
+    recency_boost   : exponential decay — articles published today score highest.
 
-    # Keyword overlap
-    if keywords:
-        hits = sum(1 for kw in keywords if kw.lower() in text)
-        keyword_score = hits / len(keywords)
-    else:
+    Scoring is strict: partial keyword overlap no longer gives a passable score.
+    An article matching only 1 out of 5 keywords scores close to 0.
+    """
+    title_text = (item.title or "").lower()
+    body_text  = (item.description or "").lower()
+    full_text  = f"{title_text} {body_text}"
+
+    if not keywords:
         keyword_score = 0.5
+    else:
+        # Title hits count 2×, body hits count 1×
+        title_hits = sum(1 for kw in keywords if kw.lower() in title_text)
+        body_hits  = sum(1 for kw in keywords if kw.lower() in body_text)
+        # Weighted overlap over a denominator that rewards title presence
+        weighted_hits = title_hits * 2 + body_hits
+        max_possible  = len(keywords) * 2   # all in title
+        raw_overlap   = weighted_hits / max_possible if max_possible else 0
+
+        # Apply a strictness curve: overlap must be >50% to score above 0.5
+        # This prevents single common-word matches from ranking highly
+        keyword_score = raw_overlap ** 1.5   # squash low overlaps harder
 
     # Recency boost — exponential decay with 7-day half-life
-    recency_score = 0.5   # neutral when date unknown
+    recency_score = 0.5
     if item.published_at:
         now     = datetime.now(timezone.utc)
         pub     = item.published_at
         if pub.tzinfo is None:
             pub = pub.replace(tzinfo=timezone.utc)
-        age_days = max(0.0, (now - pub).total_seconds() / 86400)
-        recency_score = 2 ** (-age_days / 7)   # 1.0 today → 0.5 at 7 days
+        age_days      = max(0.0, (now - pub).total_seconds() / 86400)
+        recency_score = 2 ** (-age_days / 7)
 
-    # Weighted combination
-    score = 0.65 * keyword_score + 0.35 * recency_score
+    # Keyword overlap is the dominant signal (80%), recency is secondary (20%)
+    score = 0.80 * keyword_score + 0.20 * recency_score
     return round(min(max(score, 0.0), 1.0), 4)
 
 
@@ -182,13 +198,27 @@ async def retrieve_evidence(
     t0 = time.perf_counter()
 
     # ── Query extraction ──────────────────────────────────────────────────────
-    query_set = extract_queries(claim)
-    primary_query = query_set.primary_query
+    query_set     = extract_queries(claim)
     keywords      = query_set.keywords
 
+    # Search APIs (NewsAPI, GNews) perform best with short keyword queries —
+    # sending a full question sentence like "Has Gyanesh Kumar stepped down?"
+    # returns zero results because no article title contains that exact phrasing.
+    # We build a compact query: named entities + key nouns, max 6 words.
+    if keywords:
+        api_query = " ".join(keywords[:6])
+    else:
+        # Last resort: strip question words and use the cleaned claim
+        api_query = query_set.primary_query.lstrip("Has Did Is Are Was Were Do Does Can Could Should Would ").strip()
+        api_query = api_query[:100]
+
+    # RSS feed filtering uses the full primary query (phrase matching is better
+    # in the feed-filter code, not the API).
+    rss_query = query_set.primary_query
+
     logger.info(
-        "Evidence search | claim=%r | query=%r | keywords=%s",
-        claim[:100], primary_query, keywords,
+        "Evidence search | claim=%r | api_query=%r | rss_query=%r | keywords=%s",
+        claim[:100], api_query, rss_query[:60], keywords,
     )
 
     # ── Date window ───────────────────────────────────────────────────────────
@@ -199,9 +229,16 @@ async def retrieve_evidence(
     # ── Provider selection ────────────────────────────────────────────────────
     active_providers = providers if providers is not None else _build_default_providers()
 
-    # ── Concurrent search ─────────────────────────────────────────────────────
+    # ── Concurrent search — use api_query for search APIs, rss_query for RSS ─
+    from app.evidence.providers.rss_provider import RSSFeedProvider
+
     tasks = [
-        _search_one_provider(p, primary_query, max_results, from_date)
+        _search_one_provider(
+            p,
+            rss_query if isinstance(p, RSSFeedProvider) else api_query,
+            max_results,
+            from_date,
+        )
         for p in active_providers
     ]
     raw_results: list[tuple[list[EvidenceItem], Optional[str]]] = (
@@ -223,9 +260,16 @@ async def retrieve_evidence(
     # ── Fallback queries (if primary returned nothing) ────────────────────────
     if not all_items and query_set.fallback_queries:
         for fallback_q in query_set.fallback_queries:
-            logger.info("Trying fallback query: %r", fallback_q)
+            # Shorten fallback queries too — take first 6 words max
+            fb_api_q = " ".join(fallback_q.split()[:6])
+            logger.info("Trying fallback query: %r (api: %r)", fallback_q, fb_api_q)
             fb_tasks = [
-                _search_one_provider(p, fallback_q, max_results, from_date)
+                _search_one_provider(
+                    p,
+                    fallback_q if isinstance(p, RSSFeedProvider) else fb_api_q,
+                    max_results,
+                    from_date,
+                )
                 for p in active_providers
             ]
             fb_results = await asyncio.gather(*fb_tasks)
@@ -248,8 +292,16 @@ async def retrieve_evidence(
     # ── Sort: relevance desc, then recency ────────────────────────────────────
     deduped.sort(key=lambda x: (x.relevance_score, x.published_at or datetime.min), reverse=True)
 
+    # ── Drop items with very low relevance (likely noise from RSS feeds) ──────
+    # Keep at least 1 item if we have any — but filter out clear mismatches.
+    MIN_RELEVANCE = 0.15
+    relevant = [i for i in deduped if i.relevance_score >= MIN_RELEVANCE]
+    if not relevant and deduped:
+        # All scored below threshold — keep the best one so we return something
+        relevant = deduped[:1]
+
     # ── Truncate to max_results ───────────────────────────────────────────────
-    final_items = deduped[:max_results]
+    final_items = relevant[:max_results]
 
     # ── Status determination ──────────────────────────────────────────────────
     configured_count = sum(1 for p in active_providers if p.is_configured)
@@ -273,7 +325,7 @@ async def retrieve_evidence(
 
     return EvidenceResult(
         claim=claim,
-        query=primary_query,
+        query=api_query,
         items=final_items,
         status=status,
         providers_used=providers_used,

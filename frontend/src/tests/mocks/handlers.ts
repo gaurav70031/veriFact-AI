@@ -163,7 +163,7 @@ export const handlers = [
         { status: 422 }
       )
     }
-    return HttpResponse.json({ ...mockAnalysis, input_type: 'claim', original_input: claim })
+    return HttpResponse.json({ ...mockAnalysis, input_type: 'query', original_input: claim })
   }),
 
   // Single analysis

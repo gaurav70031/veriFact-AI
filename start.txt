@@ -1,0 +1,7 @@
+backend
+cd "c:\Users\gaura\Desktop\fake news detection project\fake-news-detection\backend"
+python -m uvicorn app.main:app --reload
+
+frontend
+cd "c:\Users\gaura\Desktop\fake news detection project\fake-news-detection\frontend"
+npm run dev

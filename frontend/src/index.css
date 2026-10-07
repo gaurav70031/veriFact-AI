@@ -2,68 +2,243 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   SEMANTIC COLOR TOKENS
+   All colours live here. Components use var(--…) or the utility aliases below.
+   Light = default  |  Dark = .dark class on <html>
+───────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* backgrounds */
+  --bg-page:        #f8fafc;   /* slate-50  */
+  --bg-surface:     #ffffff;
+  --bg-surface-2:   #f1f5f9;   /* slate-100 */
+  --bg-surface-3:   #e2e8f0;   /* slate-200 */
+  --bg-input:       #ffffff;
+
+  /* borders */
+  --border:         #cbd5e1;   /* slate-300 */
+  --border-subtle:  #e2e8f0;   /* slate-200 */
+
+  /* text */
+  --text-primary:   #0f172a;   /* slate-900  — headings, important labels */
+  --text-secondary: #334155;   /* slate-700  — body copy */
+  --text-muted:     #475569;   /* slate-600  — supporting text */
+  --text-subtle:    #64748b;   /* slate-500  — captions, metadata */
+  --text-faint:     #94a3b8;   /* slate-400  — placeholders, disabled */
+
+  /* brand */
+  --brand:          #4f46e5;   /* indigo-600 */
+  --brand-light:    #e0e7ff;   /* indigo-100 */
+
+  /* status */
+  --color-success:  #059669;
+  --color-danger:   #dc2626;
+  --color-warning:  #d97706;
+  --color-info:     #2563eb;
+}
+
+.dark {
+  /* backgrounds */
+  --bg-page:        #020617;   /* slate-950 */
+  --bg-surface:     #0f172a;   /* slate-900 */
+  --bg-surface-2:   #1e293b;   /* slate-800 */
+  --bg-surface-3:   #334155;   /* slate-700 */
+  --bg-input:       rgba(30,41,59,0.8);
+
+  /* borders */
+  --border:         rgba(51,65,85,0.6);  /* slate-700/60 */
+  --border-subtle:  rgba(30,41,59,0.6);  /* slate-800/60 */
+
+  /* text */
+  --text-primary:   #f1f5f9;   /* slate-100 */
+  --text-secondary: #cbd5e1;   /* slate-300 */
+  --text-muted:     #94a3b8;   /* slate-400 */
+  --text-subtle:    #64748b;   /* slate-500 */
+  --text-faint:     #475569;   /* slate-600 */
+
+  /* brand */
+  --brand:          #818cf8;   /* indigo-400 */
+  --brand-light:    rgba(99,102,241,0.15);
+
+  /* status */
+  --color-success:  #34d399;
+  --color-danger:   #f87171;
+  --color-warning:  #fbbf24;
+  --color-info:     #60a5fa;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   GLOBAL BASE
+───────────────────────────────────────────────────────────────────────────── */
 @layer base {
   html {
     @apply antialiased scroll-smooth;
   }
 
   body {
-    @apply bg-slate-950 text-slate-100 font-sans;
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+    font-family: 'Inter', system-ui, sans-serif;
+    transition: background-color 0.3s ease, color 0.3s ease;
   }
 
-  /* Custom scrollbar */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--text-primary);
   }
-  ::-webkit-scrollbar-track {
-    @apply bg-slate-900;
+
+  p {
+    color: var(--text-secondary);
   }
-  ::-webkit-scrollbar-thumb {
-    @apply bg-slate-600 rounded-full;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-slate-500;
-  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar              { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track        { background: var(--bg-surface-2); }
+  ::-webkit-scrollbar-thumb        { background: var(--border); border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover  { background: var(--text-faint); }
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   COMPONENT CLASSES — use tokens, not hardcoded slate shades
+───────────────────────────────────────────────────────────────────────────── */
 @layer components {
+
+  /* ── Card / surface ── */
   .glass-card {
-    @apply bg-slate-900/60 backdrop-blur-sm border border-slate-800/60 rounded-xl;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    transition: background-color 0.3s ease, border-color 0.3s ease;
+  }
+  .dark .glass-card {
+    background-color: rgba(15,23,42,0.6);
+    backdrop-filter: blur(8px);
   }
 
+  /* ── Text utilities that auto-flip ── */
+  .t-primary   { color: var(--text-primary);   }
+  .t-secondary { color: var(--text-secondary); }
+  .t-muted     { color: var(--text-muted);     }
+  .t-subtle    { color: var(--text-subtle);    }
+  .t-faint     { color: var(--text-faint);     }
+
+  /* ── Gradient heading ── */
   .gradient-text {
-    @apply bg-gradient-to-r from-brand-400 to-violet-400 bg-clip-text text-transparent;
+    background: linear-gradient(135deg, var(--brand), #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 
+  /* ── Buttons ── */
   .btn-primary {
     @apply inline-flex items-center gap-2 px-5 py-2.5 rounded-lg
-           bg-brand-600 hover:bg-brand-500 text-white font-medium text-sm
-           transition-all duration-200 focus:outline-none focus:ring-2
-           focus:ring-brand-500 focus:ring-offset-2 focus:ring-offset-slate-950
+           font-medium text-sm text-white
+           transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-offset-2
            disabled:opacity-50 disabled:cursor-not-allowed;
+    background-color: var(--brand);
+    focus-ring-color: var(--brand);
+  }
+  .btn-primary:hover {
+    filter: brightness(1.1);
   }
 
   .btn-secondary {
     @apply inline-flex items-center gap-2 px-5 py-2.5 rounded-lg
-           bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-sm
-           border border-slate-700 transition-all duration-200
-           focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2
-           focus:ring-offset-slate-950 disabled:opacity-50 disabled:cursor-not-allowed;
+           font-medium text-sm
+           transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-offset-2
+           disabled:opacity-50 disabled:cursor-not-allowed;
+    background-color: var(--bg-surface-2);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover {
+    background-color: var(--bg-surface-3);
   }
 
+  /* ── Form input ── */
   .input-field {
-    @apply w-full px-4 py-2.5 rounded-lg bg-slate-800/80 border border-slate-700
-           text-slate-100 placeholder-slate-500 text-sm
-           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500
+    @apply w-full px-4 py-2.5 rounded-lg text-sm
+           focus:outline-none focus:ring-2
            transition-colors duration-200;
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+  }
+  .input-field::placeholder {
+    color: var(--text-faint);
+  }
+  .input-field:focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent);
   }
 
+  /* ── Labels ── */
   .section-title {
-    @apply text-xl font-semibold text-slate-100 tracking-tight;
+    @apply text-xl font-semibold tracking-tight;
+    color: var(--text-primary);
   }
 
   .label-sm {
-    @apply text-xs font-medium text-slate-400 uppercase tracking-wider;
+    @apply text-xs font-medium uppercase tracking-wider;
+    color: var(--text-muted);
+  }
+
+  /* ── Divider ── */
+  .divider {
+    border-color: var(--border);
+  }
+
+  /* ── Badge / chip base ── */
+  .chip {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium;
+    background-color: var(--bg-surface-2);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   OVERRIDE SLATE COLORS GLOBALLY
+   All hardcoded slate-* text colours in components auto-remap via these rules.
+   This means existing components work without touching every JSX file.
+───────────────────────────────────────────────────────────────────────────── */
+
+/* Headings / important text */
+.text-slate-100, .text-slate-50  { color: var(--text-primary) !important; }
+
+/* Body copy */
+.text-slate-200, .text-slate-300 { color: var(--text-secondary) !important; }
+
+/* Muted / supporting */
+.text-slate-400                  { color: var(--text-muted) !important; }
+
+/* Subtle / captions */
+.text-slate-500                  { color: var(--text-subtle) !important; }
+
+/* Faint / disabled */
+.text-slate-600, .text-slate-700 { color: var(--text-faint) !important; }
+
+/* Backgrounds */
+.bg-slate-950                    { background-color: var(--bg-page) !important; }
+.bg-slate-900                    { background-color: var(--bg-surface) !important; }
+.bg-slate-800                    { background-color: var(--bg-surface-2) !important; }
+.bg-slate-700                    { background-color: var(--bg-surface-3) !important; }
+
+/* Borders */
+.border-slate-800, .border-slate-800\/60 { border-color: var(--border) !important; }
+.border-slate-700, .border-slate-700\/60 { border-color: var(--border) !important; }
+
+/* Hover overrides — only apply hover bg in dark for bg-slate-800 hover */
+.hover\:bg-slate-800:hover       { background-color: var(--bg-surface-2) !important; }
+.hover\:bg-slate-700:hover       { background-color: var(--bg-surface-3) !important; }
+.hover\:text-slate-200:hover     { color: var(--text-primary) !important; }
+.hover\:text-slate-300:hover     { color: var(--text-secondary) !important; }
+
+/* Input-specific */
+.bg-slate-800\/80                { background-color: var(--bg-input) !important; }
+
+/* Surface cards with opacity */
+.bg-slate-900\/40, .bg-slate-900\/60 { background-color: var(--bg-surface) !important; }
+.bg-slate-800\/50, .bg-slate-800\/60 { background-color: var(--bg-surface-2) !important; }

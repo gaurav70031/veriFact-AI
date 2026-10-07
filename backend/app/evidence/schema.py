@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -45,7 +45,7 @@ class EvidenceItem:
     # Optional fields
     description:    Optional[str]     = None   # ≤ 500 chars, copyright-safe excerpt
     published_at:   Optional[datetime] = None  # Article publication datetime (UTC)
-    retrieved_at:   datetime           = field(default_factory=datetime.utcnow)
+    retrieved_at:   datetime           = field(default_factory=lambda: datetime.now(timezone.utc))
     provider_name:  str                = "unknown"
     relevance_score: float             = 0.0
 

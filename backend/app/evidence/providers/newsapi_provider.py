@@ -17,7 +17,6 @@ Full article content from `content` field is discarded.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -32,6 +31,7 @@ from app.evidence.base_provider import (
     ProviderUnavailableError,
 )
 from app.evidence.schema import EvidenceItem, SourceType
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class NewsAPIProvider(EvidenceProvider):
     source_type = SourceType.NEWS_API
 
     def __init__(self, api_key: Optional[str] = None) -> None:
-        self._api_key = api_key or os.getenv("NEWSAPI_KEY", "")
+        self._api_key = api_key or get_settings().newsapi_key
 
     @property
     def is_configured(self) -> bool:

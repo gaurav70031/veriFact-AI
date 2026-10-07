@@ -49,6 +49,7 @@ they'll they're they've this those through to too under until up very was
 wasn't we we'd we'll we're we've were weren't what what's when when's where
 where's which while who who's whom why why's will with won't would wouldn't
 you you'd you'll you're you've your yours yourself yourselves
+step stepped stepping down resign resigned resigns resignation
 """.split())
 
 # Phrases to strip before extraction
@@ -150,10 +151,20 @@ def extract_queries(
     """
     Extract search queries from a claim string.
 
+    Strategy
+    --------
+    For SHORT inputs (≤ 200 chars, i.e. a direct claim from the user):
+      The claim itself is the best search query — we preserve it verbatim
+      as the primary query so proper nouns like "Gyanesh Kumar" are not lost.
+      Keywords are still extracted for relevance scoring.
+
+    For LONG inputs (article body):
+      We score and select the most important tokens as before.
+
     Parameters
     ----------
     claim        : The raw factual claim text.
-    max_keywords : Max tokens to include in the primary query.
+    max_keywords : Max tokens to include in the primary query (long inputs).
     max_queries  : Total number of queries to generate (1 primary + fallbacks).
 
     Returns
@@ -162,6 +173,8 @@ def extract_queries(
     """
     if not claim or not claim.strip():
         return QuerySet(primary_query=claim or "", keywords=[])
+
+    claim = claim.strip()
 
     # 1. Strip noise phrases
     clean = _NOISE_RE.sub(" ", claim)
@@ -173,7 +186,7 @@ def extract_queries(
     entities_list = _try_spacy_entities(clean) or _extract_entities_heuristic(clean)
     entities_set  = {e.lower() for e in entities_list}
 
-    # 4. Tokenise and score
+    # 4. Tokenise and score (always — used for relevance scoring later)
     tokens = clean.split()
     scored = []
     for token in tokens:
@@ -194,21 +207,48 @@ def extract_queries(
 
     keywords = ranked[:max_keywords]
 
+    # ── SHORT CLAIM: preserve the original text as the primary query ──────────
+    # When the user types "Has Gyanesh Kumar stepped down as CEC?" we want to
+    # search for exactly that phrase, not a bag-of-words reconstruction that
+    # might drop key proper nouns or invert word order.
+    if len(claim) <= 200:
+        # Use the cleaned original as primary (stripped of noise phrases only)
+        primary_clean = _NOISE_RE.sub(" ", claim)
+        primary_clean = _SPACE_RE.sub(" ", primary_clean).strip()
+        # Remove trailing question mark — search engines treat it as punctuation
+        primary_query = primary_clean.rstrip("?").strip()
+
+        # Fallback 1: named entities only (most specific terms)
+        fallback_queries: list[str] = []
+        if entities_list:
+            # Preserve full entity phrases (e.g. "Gyanesh Kumar" not "Kumar")
+            ent_query = " ".join(entities_list[:4])
+            if ent_query.lower() != primary_query.lower():
+                fallback_queries.append(ent_query)
+        # Fallback 2: top scored keywords if different from above
+        if keywords and max_queries > 2:
+            kw_query = " ".join(keywords[:5])
+            if kw_query not in fallback_queries and kw_query.lower() != primary_query.lower():
+                fallback_queries.append(kw_query)
+
+        return QuerySet(
+            primary_query=primary_query,
+            fallback_queries=fallback_queries[:max_queries - 1],
+            keywords=keywords or primary_query.split(),
+        )
+
+    # ── LONG INPUT: scored keyword extraction (article body) ──────────────────
     if not keywords:
-        # Fallback: use the raw claim truncated
         primary_query = claim[:200]
         return QuerySet(primary_query=primary_query, keywords=[])
 
-    # 5. Build queries
     primary_query = " ".join(keywords)
 
-    fallback_queries: list[str] = []
+    fallback_queries = []
     if len(keywords) > 3 and max_queries > 1:
-        # Fallback 1: top half of keywords
         half = max(3, len(keywords) // 2)
         fallback_queries.append(" ".join(keywords[:half]))
     if len(keywords) > 5 and max_queries > 2:
-        # Fallback 2: named entities only (if any)
         ent_tokens = [k for k in keywords if k.lower() in entities_set]
         if ent_tokens and len(ent_tokens) < len(keywords):
             fallback_queries.append(" ".join(ent_tokens[:5]))

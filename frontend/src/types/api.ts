@@ -102,7 +102,7 @@ export type EvidenceVerdict =
 
 export interface AnalysisResponse {
   id: number
-  input_type: 'text' | 'url' | 'claim'
+  input_type: 'text' | 'url' | 'query'
   original_input: string
   source_url?: string
   article_title?: string

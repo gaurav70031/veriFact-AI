@@ -1,0 +1,82 @@
+# =============================================================================
+# Render Blueprint — deploys backend + PostgreSQL in one click
+# https://render.com/docs/blueprint-spec
+#
+# Usage:
+#   1. Push this repo to GitHub
+#   2. Go to render.com → New → Blueprint → connect your repo
+#   3. Render reads this file and creates all services automatically
+#   4. Fill in the secret env vars flagged with sync: false in the dashboard
+# =============================================================================
+
+databases:
+  - name: verifact-postgres
+    databaseName: fakenews_db
+    user: fakenews_user
+    plan: free          # 1 GB storage, 97 MB RAM — enough for a project demo
+    region: singapore   # change to oregon / frankfurt if preferred
+
+services:
+  - type: web
+    name: verifact-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    region: singapore
+    plan: free           # 512 MB RAM, spins down after 15 min idle
+    healthCheckPath: /api/v1/health
+
+    envVars:
+      # ── App ──────────────────────────────────────────────────────────────────
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "60"
+
+      # ── Secret — paste value in Render dashboard ──────────────────────────
+      - key: SECRET_KEY
+        sync: false   # mark as secret; enter value in Render dashboard
+
+      # ── PostgreSQL — auto-wired from the database above ───────────────────
+      - key: POSTGRES_HOST
+        fromDatabase:
+          name: verifact-postgres
+          property: host
+      - key: POSTGRES_PORT
+        fromDatabase:
+          name: verifact-postgres
+          property: port
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: verifact-postgres
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: verifact-postgres
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: verifact-postgres
+          property: password
+
+      # ── CORS — set to your Vercel frontend URL ────────────────────────────
+      - key: ALLOWED_ORIGINS
+        value: https://your-app.vercel.app   # CHANGE THIS after Vercel deploy
+
+      # ── News API keys — paste in Render dashboard ────────────────────────
+      - key: NEWSAPI_KEY
+        sync: false
+      - key: GNEWS_API_KEY
+        sync: false
+
+      # ── ML (disabled by default — no GPU on free tier) ───────────────────
+      - key: SENTENCE_TRANSFORMERS_ENABLED
+        value: "false"
+      - key: ML_SAVED_MODELS_DIR
+        value: ml/saved_models

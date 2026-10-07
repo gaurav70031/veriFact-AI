@@ -60,7 +60,7 @@ const TYPE_OPTS = [
 function InputTypeIcon({ type }: { type: string }) {
   const cls = 'w-3.5 h-3.5 shrink-0'
   if (type === 'url')   return <Link2            className={cls} />
-  if (type === 'claim') return <MessageSquareText className={cls} />
+  if (type === 'query') return <MessageSquareText className={cls} />
   return                        <FileText         className={cls} />
 }
 
@@ -115,7 +115,7 @@ function HistoryRow({ item }: { item: AnalysisListItem }) {
         <div className={cn(
           'inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border border-current/15',
           item.input_type === 'url'   ? 'text-violet-400 bg-violet-500/8' :
-          item.input_type === 'claim' ? 'text-amber-400  bg-amber-500/8'  :
+          item.input_type === 'query' ? 'text-amber-400  bg-amber-500/8'  :
           'text-brand-400 bg-brand-500/8',
         )}>
           <InputTypeIcon type={item.input_type} />

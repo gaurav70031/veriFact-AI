@@ -61,7 +61,7 @@ function InputTypeIcon({ type }: { type: string }) {
 function PageHeader({ result }: { result: AnalysisResponse }) {
   const inputLabel =
     result.input_type === 'url'   ? 'URL'    :
-    result.input_type === 'claim' ? 'Claim'  :
+    result.input_type === 'query' ? 'Claim'  :
     'Text'
 
   return (

@@ -45,7 +45,7 @@ RUN python -c " \
 FROM python:3.11-slim AS runtime
 
 # Metadata
-LABEL org.opencontainers.image.title="VeritasAI Backend"
+LABEL org.opencontainers.image.title="VeriFact AI Backend"
 LABEL org.opencontainers.image.description="Fake News Detection — FastAPI backend"
 
 # Runtime system deps only (no build tools)

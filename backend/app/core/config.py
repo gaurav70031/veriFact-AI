@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # ── Application ───────────────────────────────────────────────────────────
     app_env:     Literal["development", "staging", "production"] = "development"
-    app_name:    str  = "Fake News Detection API"
+    app_name:    str  = "VeriFact AI API"
     app_version: str  = "1.0.0"
     debug:       bool = True
     secret_key:  str  = "change-me-in-production-use-32-chars-min"
@@ -76,9 +76,12 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
     # ── Evidence / news APIs ──────────────────────────────────────────────────
-    newsapi_key:   str = ""
-    serpapi_key:   str = ""
-    rss_feed_urls: str = ""   # comma-separated
+    newsapi_key:     str = ""
+    gnews_api_key:   str = ""   # GNews (https://gnews.io)
+    serpapi_key:     str = ""   # SerpAPI Google Search
+    brave_search_key: str = ""  # Brave Search API
+    search_provider: str = "serpapi"  # "serpapi" | "brave"
+    rss_feed_urls:   str = ""   # comma-separated
 
     @property
     def rss_feeds(self) -> list[str]:
@@ -101,7 +104,9 @@ class Settings(BaseSettings):
     cookie_samesite: str  = "lax"   # "none" + secure=True for cross-site prod
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Look for .env in both the backend/ dir and the project root (one level up).
+        # This handles running uvicorn from backend/ where the .env lives at ../
+        env_file=[".env", "../.env"],
         case_sensitive=False,
         extra="ignore",
     )

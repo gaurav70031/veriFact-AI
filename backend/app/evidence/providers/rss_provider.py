@@ -48,6 +48,12 @@ _DEFAULT_FEEDS: list[str] = [
     "https://feeds.theguardian.com/theguardian/world/rss",
     "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
     "https://www.who.int/feeds/entity/mediacentre/news/en",
+    # ── Indian news sources ───────────────────────────────────────────────────
+    "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+    "https://feeds.feedburner.com/ndtvnews-top-stories",
+    "https://www.thehindu.com/news/national/feeder/default.rss",
+    "https://indianexpress.com/feed/",
+    "https://www.livemint.com/rss/news",
 ]
 
 
@@ -71,11 +77,35 @@ def _parse_date(entry: dict) -> Optional[datetime]:
 
 
 def _entry_matches_query(entry: dict, query_terms: list[str]) -> bool:
-    """Return True if any query term appears in the entry title or summary."""
+    """
+    Return True if the entry is sufficiently relevant to the query.
+
+    Matching rules (strictest first):
+    1. If any query term is a multi-word phrase (proper noun), require it
+       to appear verbatim in the title or summary.
+    2. Otherwise require at least 2 individual terms to match (not just 1),
+       which prevents generic "India" articles matching a specific person query.
+    """
     haystack = (
         (entry.get("title") or "") + " " + (entry.get("summary") or "")
     ).lower()
-    return any(term.lower() in haystack for term in query_terms)
+
+    # Separate multi-word phrases from single tokens
+    phrases       = [t for t in query_terms if " " in t]
+    single_tokens = [t for t in query_terms if " " not in t]
+
+    # A verbatim phrase match is always sufficient
+    for phrase in phrases:
+        if phrase.lower() in haystack:
+            return True
+
+    # For single tokens, require at least 2 matches (or all if only 1 term)
+    if single_tokens:
+        hits = sum(1 for t in single_tokens if t.lower() in haystack)
+        threshold = min(2, len(single_tokens))
+        return hits >= threshold
+
+    return False
 
 
 class RSSFeedProvider(EvidenceProvider):
@@ -116,9 +146,13 @@ class RSSFeedProvider(EvidenceProvider):
                 "feedparser is not installed. Run: pip install feedparser",
             )
 
-        query_terms = [t.strip() for t in query.split() if len(t.strip()) > 3]
+        query_terms = [t.strip() for t in query.split() if len(t.strip()) > 2]
         if not query_terms:
             query_terms = query.split()
+
+        # Also treat the full query as a phrase candidate for exact matching
+        if len(query.split()) > 1:
+            query_terms = [query] + query_terms  # prepend full phrase
 
         logger.info(
             "[%s] Searching %d feeds for: %r",

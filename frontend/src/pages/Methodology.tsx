@@ -97,7 +97,7 @@ export default function Methodology() {
       <div className="mb-10">
         <h1 className="text-3xl font-bold text-slate-100 mb-3">Methodology</h1>
         <p className="text-slate-400 leading-relaxed">
-          A transparent description of how VeritasAI analyses content —
+          A transparent description of how VeriFact AI analyses content —
           from raw input to final verdict.
         </p>
       </div>

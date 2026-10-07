@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider }      from '@/context/AuthContext'
+import { ThemeProvider }     from '@/context/ThemeContext'
 import { ProtectedRoute }    from '@/components/auth/ProtectedRoute'
 import { Layout }            from '@/components/layout/Layout'
 import Home                  from '@/pages/Home'
@@ -16,39 +17,41 @@ import Register              from '@/pages/Register'
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Routes>
-          {/* ── Auth pages (no main layout) ────────────────────────────── */}
-          <Route path="/login"    element={<Login />} />
-          <Route path="/register" element={<Register />} />
+    <ThemeProvider>
+      <BrowserRouter>
+        <AuthProvider>
+          <Routes>
+            {/* ── Auth pages (no main layout) ────────────────────────────── */}
+            <Route path="/login"    element={<Login />} />
+            <Route path="/register" element={<Register />} />
 
-          {/* ── Main layout ──────────────────────────────────────────────── */}
-          <Route element={<Layout />}>
-            <Route path="/"            element={<Home />} />
-            <Route path="/analyze"     element={<Analyze />} />
-            <Route path="/results/:id" element={<Results />} />
-            <Route path="/live-news"   element={<LiveNews />} />
-            <Route path="/analytics"   element={<Analytics />} />
-            <Route path="/performance" element={<ModelPerformance />} />
-            <Route path="/about"       element={<About />} />
-            <Route path="/methodology" element={<Methodology />} />
+            {/* ── Main layout ──────────────────────────────────────────────── */}
+            <Route element={<Layout />}>
+              <Route path="/"            element={<Home />} />
+              <Route path="/analyze"     element={<Analyze />} />
+              <Route path="/results/:id" element={<Results />} />
+              <Route path="/live-news"   element={<LiveNews />} />
+              <Route path="/analytics"   element={<Analytics />} />
+              <Route path="/performance" element={<ModelPerformance />} />
+              <Route path="/about"       element={<About />} />
+              <Route path="/methodology" element={<Methodology />} />
 
-            {/* ── Protected routes (requires auth) ─────────────────────── */}
-            <Route
-              path="/history"
-              element={
-                <ProtectedRoute>
-                  <History />
-                </ProtectedRoute>
-              }
-            />
+              {/* ── Protected routes (requires auth) ─────────────────────── */}
+              <Route
+                path="/history"
+                element={
+                  <ProtectedRoute>
+                    <History />
+                  </ProtectedRoute>
+                }
+              />
 
-            {/* 404 fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Route>
-        </Routes>
-      </AuthProvider>
-    </BrowserRouter>
+              {/* 404 fallback */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
+          </Routes>
+        </AuthProvider>
+      </BrowserRouter>
+    </ThemeProvider>
   )
 }

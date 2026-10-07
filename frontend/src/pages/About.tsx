@@ -14,7 +14,7 @@ export default function About() {
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12 animate-fade-in">
       <div className="mb-10">
-        <h1 className="text-3xl font-bold text-slate-100 mb-3">About VeritasAI</h1>
+        <h1 className="text-3xl font-bold text-slate-100 mb-3">About VeriFact AI</h1>
         <p className="text-slate-400 leading-relaxed max-w-2xl">
           A final-year B.Tech CSE project — a production-oriented fake news detection system
           using NLP and transformer-based models. Built to demonstrate real ML pipelines,

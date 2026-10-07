@@ -17,7 +17,6 @@ NewsAPI and GNews have returned fewer than the requested results.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -32,6 +31,7 @@ from app.evidence.base_provider import (
     ProviderUnavailableError,
 )
 from app.evidence.schema import EvidenceItem, SourceType
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 _TIMEOUT = httpx.Timeout(12.0, connect=5.0)
@@ -202,13 +202,14 @@ class SearchProvider(EvidenceProvider):
         provider:    Optional[str] = None,
         api_key:     Optional[str] = None,
     ) -> None:
+        settings = get_settings()
         self._backend = (
-            (provider or os.getenv("SEARCH_PROVIDER", "serpapi")).lower()
+            (provider or settings.search_provider).lower()
         )
         if self._backend == "serpapi":
-            self._api_key = api_key or os.getenv("SERPAPI_KEY", "")
+            self._api_key = api_key or settings.serpapi_key
         elif self._backend == "brave":
-            self._api_key = api_key or os.getenv("BRAVE_SEARCH_KEY", "")
+            self._api_key = api_key or settings.brave_search_key
         else:
             logger.warning(
                 "Unknown SEARCH_PROVIDER '%s'. Valid options: serpapi, brave.",

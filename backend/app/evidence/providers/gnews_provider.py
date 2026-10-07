@@ -16,7 +16,6 @@ Only title, description (≤ 500 chars), and URL are stored.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -31,6 +30,7 @@ from app.evidence.base_provider import (
     ProviderUnavailableError,
 )
 from app.evidence.schema import EvidenceItem, SourceType
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class GNewsProvider(EvidenceProvider):
     source_type = SourceType.GNEWS
 
     def __init__(self, api_key: Optional[str] = None) -> None:
-        self._api_key = api_key or os.getenv("GNEWS_API_KEY", "")
+        self._api_key = api_key or get_settings().gnews_api_key
 
     @property
     def is_configured(self) -> bool:

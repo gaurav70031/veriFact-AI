@@ -41,8 +41,13 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email:    EmailStr = Field(..., description="Registered email address.")
-    password: str      = Field(..., min_length=1, description="Account password.")
+    email:    str = Field(..., min_length=3, description="Registered email address.")
+    password: str = Field(..., min_length=1, description="Account password.")
+
+    @field_validator("email")
+    @classmethod
+    def normalise_email(cls, v: str) -> str:
+        return v.strip().lower()
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
