@@ -19,8 +19,8 @@ httpx==0.27.0
 
 # ── Article extraction ────────────────────────────────────────────────────────
 trafilatura==1.9.0             # primary extractor (boilerplate removal)
-newspaper3k==0.2.8             # fallback extractor
-lxml[html_clean]==5.2.2        # HTML parsing dependency for newspaper3k
+newspaper4k==0.9.3             # fallback extractor (maintained fork of newspaper3k)
+lxml==5.2.2                    # HTML parsing (newspaper4k dependency)
 
 # ── ML inference (baseline models) ───────────────────────────────────────────
 scikit-learn==1.4.2
