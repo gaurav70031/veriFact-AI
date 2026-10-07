@@ -72,4 +72,9 @@ async def model_performance(
 async def get_stats(
     db: AsyncSession = Depends(get_db),
 ) -> StatsResponse:
-    return await stats_service.get_stats(db)
+    import traceback
+    try:
+        return await stats_service.get_stats(db)
+    except Exception as e:
+        logger.error("Stats endpoint error: %s\n%s", e, traceback.format_exc())
+        raise
