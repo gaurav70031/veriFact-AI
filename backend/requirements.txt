@@ -1,60 +1,39 @@
 # ── Web framework ─────────────────────────────────────────────────────────────
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
-python-multipart==0.0.9       # required for form data / file uploads
+python-multipart==0.0.9
 
 # ── Validation & settings ─────────────────────────────────────────────────────
 pydantic==2.7.1
 pydantic-settings==2.2.1
-email-validator==2.1.1       # required by pydantic EmailStr in auth schemas
+email-validator==2.1.1
 
 # ── Database ──────────────────────────────────────────────────────────────────
 sqlalchemy==2.0.30
 alembic==1.13.1
-asyncpg==0.29.0               # async PostgreSQL driver
-psycopg2-binary==2.9.9        # sync driver for Alembic migrations
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
 
-# ── HTTP client (article extraction + evidence fetching) ──────────────────────
+# ── HTTP client ───────────────────────────────────────────────────────────────
 httpx==0.27.0
 
 # ── Article extraction ────────────────────────────────────────────────────────
-trafilatura==1.9.0             # primary extractor (boilerplate removal)
-newspaper4k==0.9.3             # fallback extractor (maintained fork of newspaper3k)
-lxml==5.2.2                    # HTML parsing (newspaper4k dependency)
+trafilatura==1.9.0
+lxml==5.2.2
+feedparser==6.0.11
 
-# ── ML inference (baseline models) ───────────────────────────────────────────
+# ── ML inference ─────────────────────────────────────────────────────────────
 scikit-learn==1.4.2
 joblib==1.4.2
 nltk==3.8.1
 numpy==1.26.4
 pandas==2.2.2
 
-# ── Explainability ────────────────────────────────────────────────────────────
-lime==0.2.0.1          # LIME for TF-IDF baseline models
-# sentence-transformers  # optional — improves evidence comparator similarity scoring
-
-# ── ML inference (transformer) — install separately if GPU is available ───────
-# torch and transformers are heavy; pin versions that match the training env.
-# Uncomment if this backend will run transformer inference directly:
-# torch==2.3.0
-# transformers==4.41.0
-
-# ── Caching ───────────────────────────────────────────────────────────────────
-redis==5.0.4
-
 # ── Utilities ─────────────────────────────────────────────────────────────────
 python-dotenv==1.0.1
-python-dateutil==2.9.0     # date parsing in search_provider (SerpAPI / Brave dates)
+python-dateutil==2.9.0
 
 # ── Authentication ────────────────────────────────────────────────────────────
-# Never store JWT secrets in source code — use environment variables.
-python-jose[cryptography]==3.3.0  # JWT encode/decode (HS256)
-passlib[bcrypt]==1.7.4             # password hashing context
-bcrypt==4.1.3                      # bcrypt backend for passlib
-
-# ── Testing ───────────────────────────────────────────────────────────────────
-pytest==8.2.2              # test runner
-pytest-asyncio==0.23.7     # async test support (asyncio_mode = auto in pytest.ini)
-anyio[asyncio]==4.4.0      # async compatibility layer (used in conftest anyio_backend)
-aiosqlite==0.22.1          # async SQLite for in-memory DB tests (no PostgreSQL needed)
-pytest-httpx==0.36.2       # mock httpx clients for URL extraction / evidence tests
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.3
