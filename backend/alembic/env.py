@@ -49,11 +49,13 @@ def get_sync_url() -> str:
     Alembic's migration runner is synchronous and cannot use asyncpg.
     """
     settings = get_settings()
-    # Replace asyncpg driver with psycopg2 for Alembic
-    url = settings.database_url  # already postgresql://...
-    return url.replace("postgresql+asyncpg://", "postgresql://").replace(
-        "postgres://", "postgresql://"
-    )
+    url = settings.database_url
+    # Force psycopg2 driver explicitly — SQLAlchemy 2.1+ defaults to psycopg (v3)
+    # which is not installed. psycopg2-binary is our sync driver.
+    url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    url = url.replace("postgres://", "postgresql+psycopg2://")
+    url = url.replace("postgresql://", "postgresql+psycopg2://")
+    return url
 
 
 # ---------------------------------------------------------------------------

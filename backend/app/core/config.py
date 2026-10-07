@@ -45,9 +45,9 @@ class Settings(BaseSettings):
 
     @property
     def database_url_sync(self) -> str:
-        """Synchronous URL for Alembic."""
+        """Synchronous URL for Alembic — explicitly uses psycopg2."""
         return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
+            f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
