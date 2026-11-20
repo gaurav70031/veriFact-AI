@@ -1,0 +1,110 @@
+{
+  "logistic_regression": {
+    "model_id": "logistic_regression",
+    "test_samples": 3908,
+    "accuracy": 0.993859,
+    "macro_f1": 0.993607,
+    "weighted_f1": 0.993863,
+    "macro_precision": 0.992991,
+    "macro_recall": 0.994244,
+    "roc_auc": 0.999742,
+    "per_class": {
+      "FAKE": {
+        "precision": 0.997432,
+        "recall": 0.992334,
+        "f1": 0.994876,
+        "support": 2348
+      },
+      "REAL": {
+        "precision": 0.98855,
+        "recall": 0.996154,
+        "f1": 0.992337,
+        "support": 1560
+      }
+    },
+    "confusion_matrix": [
+      [
+        2330,
+        18
+      ],
+      [
+        6,
+        1554
+      ]
+    ],
+    "inference_time_ms": 2027.775,
+    "per_sample_ms": 0.5189
+  },
+  "linear_svm": {
+    "model_id": "linear_svm",
+    "test_samples": 3908,
+    "accuracy": 0.998721,
+    "macro_f1": 0.998666,
+    "weighted_f1": 0.998721,
+    "macro_precision": 0.998613,
+    "macro_recall": 0.99872,
+    "roc_auc": 0.999974,
+    "per_class": {
+      "FAKE": {
+        "precision": 0.999148,
+        "recall": 0.998722,
+        "f1": 0.998935,
+        "support": 2348
+      },
+      "REAL": {
+        "precision": 0.998078,
+        "recall": 0.998718,
+        "f1": 0.998398,
+        "support": 1560
+      }
+    },
+    "confusion_matrix": [
+      [
+        2345,
+        3
+      ],
+      [
+        2,
+        1558
+      ]
+    ],
+    "inference_time_ms": 2247.765,
+    "per_sample_ms": 0.5752
+  },
+  "naive_bayes": {
+    "model_id": "naive_bayes",
+    "test_samples": 3908,
+    "accuracy": 0.961105,
+    "macro_f1": 0.959593,
+    "weighted_f1": 0.961169,
+    "macro_precision": 0.958152,
+    "macro_recall": 0.961178,
+    "roc_auc": 0.993825,
+    "per_class": {
+      "FAKE": {
+        "precision": 0.974093,
+        "recall": 0.960818,
+        "f1": 0.96741,
+        "support": 2348
+      },
+      "REAL": {
+        "precision": 0.942211,
+        "recall": 0.961538,
+        "f1": 0.951777,
+        "support": 1560
+      }
+    },
+    "confusion_matrix": [
+      [
+        2256,
+        92
+      ],
+      [
+        60,
+        1500
+      ]
+    ],
+    "inference_time_ms": 2055.669,
+    "per_sample_ms": 0.526
+  }
+}
