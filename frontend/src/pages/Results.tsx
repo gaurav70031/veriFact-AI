@@ -47,50 +47,6 @@ import { ReportFooter }         from '@/components/results/ReportFooter'
 
 import type { AnalysisResponse, EvidenceSourceResult } from '@/types/api'
 
-// ── Gemini Verdict Card ───────────────────────────────────────────────────────
-
-const GEMINI_STYLES: Record<string, { bg: string; border: string; badge: string; icon: string; label: string }> = {
-  TRUE:       { bg: 'bg-green-900/20',  border: 'border-green-500/40',  badge: 'bg-green-500/20 text-green-300',  icon: '✅', label: 'TRUE'       },
-  FALSE:      { bg: 'bg-red-900/20',    border: 'border-red-500/40',    badge: 'bg-red-500/20 text-red-300',      icon: '❌', label: 'FALSE'      },
-  UNCERTAIN:  { bg: 'bg-yellow-900/20', border: 'border-yellow-500/40', badge: 'bg-yellow-500/20 text-yellow-300',icon: '⚠️', label: 'UNCERTAIN'  },
-  MISLEADING: { bg: 'bg-orange-900/20', border: 'border-orange-500/40', badge: 'bg-orange-500/20 text-orange-300',icon: '⚠️', label: 'MISLEADING' },
-}
-
-function GeminiVerdictCard({
-  verdict, confidence, explanation
-}: {
-  verdict: string; confidence: number; explanation: string
-}) {
-  const style = GEMINI_STYLES[verdict] ?? GEMINI_STYLES['UNCERTAIN']
-  return (
-    <div className={`rounded-xl border p-5 ${style.bg} ${style.border}`}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className="text-lg">{style.icon}</span>
-          <span className="text-sm font-semibold text-text-secondary uppercase tracking-wide">
-            Gemini AI Fact-Check
-          </span>
-          <span className="text-xs text-text-muted bg-surface-2 px-2 py-0.5 rounded-full">
-            Primary verdict
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`text-xs font-bold px-3 py-1 rounded-full ${style.badge}`}>
-            {style.label}
-          </span>
-          <span className="text-sm font-semibold text-text-primary">
-            {Math.round(confidence * 100)}% confident
-          </span>
-        </div>
-      </div>
-      <p className="text-sm text-text-primary leading-relaxed">{explanation}</p>
-      <p className="text-xs text-text-muted mt-2">
-        Gemini reads live evidence and applies world knowledge — including Indian context, current events, and post-2018 topics.
-      </p>
-    </div>
-  )
-}
-
 // ── Input type icon ───────────────────────────────────────────────────────────
 
 function InputTypeIcon({ type }: { type: string }) {
@@ -330,18 +286,7 @@ python scripts/register_models.py --overwrite`}
         <SourceMeta result={result} />
       </div>
 
-      {/* ③ Gemini Verdict — primary result when available */}
-      {result.gemini_available && result.gemini_verdict && (
-        <div className="mb-6">
-          <GeminiVerdictCard
-            verdict={result.gemini_verdict}
-            confidence={result.gemini_confidence ?? 0}
-            explanation={result.gemini_explanation ?? ''}
-          />
-        </div>
-      )}
-
-      {/* ④ Assessment Hero — ML + evidence signals */}
+      {/* ③ Assessment Hero — Gemini primary + ML signal + evidence */}
       <div className="mb-6">
         <AssessmentHero
           mlVerdict={result.ml_verdict}
@@ -349,6 +294,10 @@ python scripts/register_models.py --overwrite`}
           evidenceVerdict={result.evidence_verdict}
           evidenceExplanation={result.evidence_explanation}
           hasConflict={anyConflict}
+          geminiVerdict={result.gemini_verdict}
+          geminiConfidence={result.gemini_confidence}
+          geminiExplanation={result.gemini_explanation}
+          geminiAvailable={result.gemini_available}
         />
       </div>
 
