@@ -21,7 +21,7 @@ services:
     name: verifact-backend
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    dockerContext: .
     region: singapore
     plan: free           # 512 MB RAM, spins down after 15 min idle
     healthCheckPath: /api/v1/health
@@ -74,6 +74,14 @@ services:
         sync: false
       - key: GNEWS_API_KEY
         sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+
+      # ── Search provider ───────────────────────────────────────────────────
+      - key: SEARCH_PROVIDER
+        value: tavily
 
       # ── ML (disabled by default — no GPU on free tier) ───────────────────
       - key: SENTENCE_TRANSFORMERS_ENABLED

@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Frontend (not needed in backend image)
+frontend/
+
+# Large raw datasets (not needed at runtime — models are pre-trained)
+ml/datasets/raw/Fake.csv
+ml/datasets/raw/True.csv
+ml/datasets/processed/train.csv
+ml/datasets/processed/val.csv
+ml/datasets/processed/test.csv
+
+# Transformer checkpoints (too large — not used on free tier)
+ml/saved_models/distilbert/
+
+# Docs and test files
+docs/
+tests/
+*.md
+pytest.ini
+
+# Local env files (secrets never go in image)
+.env
+.env.*
+!.env.example
+
+# Docker files themselves
+docker-compose*.yml

@@ -1,6 +1,11 @@
 # =============================================================================
-# Backend Dockerfile — build context is ./backend/
-# ml/ is copied into backend/ml/ so it's available in the build context
+# Backend Dockerfile
+#
+# Build context: project root (.)
+# This allows copying ml/saved_models/ (trained models) into the image.
+#
+# Usage:
+#   docker build -f backend/Dockerfile -t verifact-backend .
 # =============================================================================
 
 # ── Stage 1: dependency builder ───────────────────────────────────────────────
@@ -15,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir -r requirements.txt
 
@@ -37,8 +42,11 @@ RUN groupadd --gid 1001 appgroup \
 
 WORKDIR /app
 
-# Copy backend app source
-COPY --chown=appuser:appgroup . .
+# Copy backend application source
+COPY --chown=appuser:appgroup backend/ .
+
+# Copy ML package and trained models from project root
+COPY --chown=appuser:appgroup ml/ ./ml/
 
 RUN chmod +x /app/docker/entrypoint.sh
 
