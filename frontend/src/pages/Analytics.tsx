@@ -1,446 +1,546 @@
 /**
- * Analytics page
+ * Misinformation Pattern Analysis
  *
- * Every number on this page comes from live API calls — nothing hardcoded.
+ * Full analytics dashboard driven by GET /api/v1/analytics/patterns
+ * with dedicated endpoints for word freq, temporal, sentiment, and topics.
  *
- * Data sources:
- *   GET /api/v1/stats    → StatsResponse   (counts, percentages, averages)
- *   GET /api/v1/history  → PaginatedHistory (recent analyses, evidence availability)
- *
- * Sections:
- *   1. KPI grid          — total, completed, failed, pending, avg confidence, avg time
- *   2. Assessment dist.  — donut chart + percentage breakdown (from stats.verdict_counts)
- *   3. Evidence avail.   — % analyses where evidence was found (computed from history)
- *   4. Model usage       — which models ran (from predictions in recent history)
- *   5. Recent analyses   — last 5 completed items (from history page 1)
- *   6. Processing time   — avg from DB
+ * All data from live API. No hardcoded statistics.
+ * Insights distinguish correlations from causal conclusions.
  */
 
-import { useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { useState } from 'react'
 import {
-  TrendingUp, CheckCircle, XCircle, Clock,
-  BarChart3, Database, Wifi, ArrowRight, RefreshCw, AlertCircle,
+  TrendingUp, BarChart3, Database, RefreshCw, AlertCircle,
+  PieChart as PieChartIcon, Activity, Layers, Hash,
+  Filter, Lightbulb, AlertTriangle, Type, FileText, Clock,
 } from 'lucide-react'
-import { useStats, useHistory } from '@/hooks/useApi'
-import { VerdictDonut } from '@/components/charts/VerdictDonut'
-import { ProgressBar } from '@/components/ui/ProgressBar'
-import { Spinner } from '@/components/ui/Spinner'
-import { ErrorState } from '@/components/ui/ErrorState'
 import {
-  cn, formatMs, formatRelativeTime, formatDateTime,
-  getVerdictConfig, truncate,
-} from '@/lib/utils'
-import type { StatsResponse, PaginatedHistory } from '@/types/api'
+  BarChart, Bar, Cell, PieChart, Pie, AreaChart, Area,
+  ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, Legend, ReferenceLine,
+} from 'recharts'
+import { usePatterns, useTemporalTrend, useSentiment, useWordFreq, useTopics } from '@/hooks/useApi'
+import { WordCloud } from '@/components/charts/WordCloud'
+import { Spinner } from '@/components/ui/Spinner'
+import { SkeletonCard, SkeletonChart } from '@/components/ui/Skeleton'
+import { cn } from '@/lib/utils'
+import type { PatternsResponse, Insight } from '@/types/api'
 
-// ─── KPI card ─────────────────────────────────────────────────────────────────
-
-function KpiCard({
-  icon, label, value, sub, color = 'text-slate-200',
-}: {
-  icon: React.ReactNode
-  label: string
-  value: string
-  sub?: string
-  color?: string
-}) {
-  return (
-    <div className="glass-card p-5">
-      <div className="flex items-start justify-between mb-3">
-        <div className="p-2 rounded-lg bg-slate-800/60">{icon}</div>
-      </div>
-      <div className={cn('text-2xl font-bold tracking-tight', color)}>{value}</div>
-      <div className="text-xs text-slate-500 mt-0.5">{label}</div>
-      {sub && <div className="text-xs text-slate-700 mt-0.5">{sub}</div>}
-    </div>
-  )
+// ── Tooltip style ─────────────────────────────────────────────────────────────
+const TT = {
+  contentStyle: { backgroundColor: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 8 },
+  labelStyle: { color: 'var(--text-primary)', fontWeight: 600 },
+  itemStyle:  { color: 'var(--text-secondary)' },
 }
 
-// ─── Assessment distribution ──────────────────────────────────────────────────
+const MODEL_COLORS = ['#818cf8', '#34d399', '#f87171', '#fbbf24', '#a78bfa', '#60a5fa']
 
-function AssessmentDistribution({ stats }: { stats: StatsResponse }) {
-  const completed = Math.max(stats.completed, 1)
+// ── Filter bar ────────────────────────────────────────────────────────────────
 
-  const rows = [
-    { key: 'FAKE',       label: 'Fake',       count: stats.verdict_counts.FAKE,       color: 'text-red-400',    bar: 'bg-red-500' },
-    { key: 'REAL',       label: 'Real',        count: stats.verdict_counts.REAL,       color: 'text-emerald-400', bar: 'bg-emerald-500' },
-    { key: 'UNVERIFIED', label: 'Unverified',  count: stats.verdict_counts.UNVERIFIED, color: 'text-amber-400',  bar: 'bg-amber-500' },
-    { key: 'MIXED',      label: 'Mixed',       count: stats.verdict_counts.MIXED,      color: 'text-orange-400', bar: 'bg-orange-500' },
-  ]
+interface FilterState {
+  source:    string    // "live" | "dataset" | "both"
+  verdict:   string
+  date_from: string
+  date_to:   string
+  limit:     number
+}
 
+function FilterBar({ filters, onFilter }: { filters: FilterState; onFilter: (f: FilterState) => void }) {
   return (
-    <div className="glass-card p-6">
-      <div className="flex items-center gap-2 mb-1">
-        <BarChart3 className="w-4 h-4 text-slate-500" />
-        <h2 className="section-title">Assessment Distribution</h2>
-      </div>
-      <p className="text-xs text-slate-600 mb-5">
-        ML ensemble predictions — {stats.completed.toLocaleString()} completed analyses
-      </p>
+    <div className="card p-4 mb-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <Filter className="w-4 h-4" style={{ color: 'var(--text-subtle)' }} />
 
-      <div className="grid sm:grid-cols-2 gap-6">
-        {/* Donut */}
         <div>
-          <VerdictDonut counts={stats.verdict_counts} />
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-subtle)' }}>Source</label>
+          <select className="input-field text-sm py-1.5" value={filters.source}
+            onChange={(e) => onFilter({ ...filters, source: e.target.value })}>
+            <option value="live">Live analyses</option>
+            <option value="dataset">Dataset (ISOT)</option>
+            <option value="both">Both</option>
+          </select>
         </div>
 
-        {/* Breakdown bars */}
-        <div className="flex flex-col justify-center space-y-4">
-          {rows.filter((r) => r.count > 0).map((r) => {
-            const pct = (r.count / completed) * 100
-            return (
-              <div key={r.key}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className={cn('text-sm font-medium', r.color)}>{r.label}</span>
-                  <div className="text-right">
-                    <span className="text-sm font-mono text-slate-300">{r.count.toLocaleString()}</span>
-                    <span className="text-xs text-slate-600 ml-1.5">({pct.toFixed(1)}%)</span>
-                  </div>
-                </div>
-                <ProgressBar value={pct / 100} color={r.bar} size="md" />
-              </div>
-            )
-          })}
-          {rows.every((r) => r.count === 0) && (
-            <p className="text-sm text-slate-600 text-center py-4">No completed analyses yet.</p>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Evidence availability ────────────────────────────────────────────────────
-
-function EvidenceAvailability({ history }: { history: PaginatedHistory }) {
-  const stats = useMemo(() => {
-    const completed = history.items.filter((i) => i.status === 'completed')
-    if (!completed.length) return null
-
-    // We don't have evidence_verdict per item in the history list item type,
-    // but we can infer: if final_verdict is set, the analysis completed.
-    // For a meaningful metric we show the fraction of completed analyses
-    // vs failed/pending, plus the page-level count breakdown.
-    const byStatus: Record<string, number> = {}
-    for (const item of history.items) {
-      byStatus[item.status] = (byStatus[item.status] ?? 0) + 1
-    }
-    const byVerdict: Record<string, number> = {}
-    for (const item of completed) {
-      const v = item.final_verdict ?? 'no_verdict'
-      byVerdict[v] = (byVerdict[v] ?? 0) + 1
-    }
-    return { byStatus, byVerdict, total: history.items.length, completed: completed.length }
-  }, [history])
-
-  if (!stats) return null
-
-  const completedPct = stats.total > 0 ? (stats.completed / stats.total) * 100 : 0
-
-  return (
-    <div className="glass-card p-6">
-      <div className="flex items-center gap-2 mb-1">
-        <Wifi className="w-4 h-4 text-slate-500" />
-        <h2 className="section-title">Analysis Completion</h2>
-      </div>
-      <p className="text-xs text-slate-600 mb-5">
-        Based on the most recent {history.items.length} analyses
-      </p>
-
-      <div className="space-y-4">
-        {/* Completion rate */}
         <div>
-          <div className="flex justify-between text-xs mb-1.5">
-            <span className="text-slate-400">Completed</span>
-            <span className="text-emerald-400 font-mono">{completedPct.toFixed(0)}%</span>
-          </div>
-          <ProgressBar value={completedPct / 100} color="bg-emerald-500" size="md" />
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-subtle)' }}>Verdict</label>
+          <select className="input-field text-sm py-1.5" value={filters.verdict}
+            onChange={(e) => onFilter({ ...filters, verdict: e.target.value })}>
+            <option value="">All</option>
+            <option value="FAKE">FAKE</option>
+            <option value="REAL">REAL</option>
+            <option value="MIXED">MIXED</option>
+            <option value="UNVERIFIED">UNVERIFIED</option>
+          </select>
         </div>
 
-        {/* Status breakdown */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
-          {Object.entries(stats.byStatus).map(([status, count]) => (
-            <div key={status} className="text-center rounded-lg bg-slate-800/40 py-3 px-2">
-              <div className={cn(
-                'text-lg font-bold',
-                status === 'completed'  ? 'text-emerald-400' :
-                status === 'failed'     ? 'text-red-400'     :
-                'text-amber-400',
-              )}>
-                {count}
-              </div>
-              <div className="text-xs text-slate-600 capitalize mt-0.5">{status}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Verdict breakdown among completed */}
-        {Object.keys(stats.byVerdict).length > 0 && (
-          <div className="pt-2 border-t border-slate-800">
-            <div className="label-sm mb-2">Verdict breakdown (completed)</div>
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(stats.byVerdict).map(([verdict, count]) => {
-                const vc = getVerdictConfig(verdict)
-                return (
-                  <span key={verdict} className={cn(
-                    'text-xs px-2.5 py-1 rounded-full border border-current/15',
-                    vc.color, vc.bg,
-                  )}>
-                    {vc.label}: {count}
-                  </span>
-                )
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ─── Recent analyses ──────────────────────────────────────────────────────────
-
-function RecentAnalyses({ history }: { history: PaginatedHistory }) {
-  const recent = history.items.slice(0, 5)
-  if (!recent.length) return null
-
-  return (
-    <div className="glass-card overflow-hidden">
-      <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
         <div>
-          <h2 className="section-title">Recent Analyses</h2>
-          <p className="text-xs text-slate-600 mt-0.5">Latest submissions from the database</p>
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-subtle)' }}>From date</label>
+          <input type="date" className="input-field text-sm py-1.5" value={filters.date_from}
+            onChange={(e) => onFilter({ ...filters, date_from: e.target.value })} />
         </div>
-        <Link to="/history" className="text-xs text-brand-400 hover:text-brand-300 transition-colors flex items-center gap-1">
-          View all <ArrowRight className="w-3 h-3" />
-        </Link>
-      </div>
 
-      <div className="divide-y divide-slate-800/50">
-        {recent.map((item) => {
-          const vc      = getVerdictConfig(item.final_verdict ?? undefined)
-          const content = item.article_title || truncate(item.original_input, 80)
-          return (
-            <Link
-              key={item.id}
-              to={`/results/${item.id}`}
-              className="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-800/20 transition-colors group"
-            >
-              {/* ID */}
-              <span className="text-xs font-mono text-slate-700 w-8 shrink-0">
-                #{item.id}
-              </span>
+        <div>
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-subtle)' }}>To date</label>
+          <input type="date" className="input-field text-sm py-1.5" value={filters.date_to}
+            onChange={(e) => onFilter({ ...filters, date_to: e.target.value })} />
+        </div>
 
-              {/* Content */}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-slate-300 line-clamp-1 group-hover:text-slate-200">
-                  {content}
-                </p>
-                <span className="text-xs text-slate-600 flex items-center gap-1 mt-0.5">
-                  <Clock className="w-3 h-3" />
-                  {formatRelativeTime(item.created_at)}
-                </span>
-              </div>
-
-              {/* Verdict */}
-              <div className="text-right shrink-0">
-                {item.status === 'completed' && item.final_verdict ? (
-                  <span className={cn('text-xs font-semibold', vc.color)}>{vc.label}</span>
-                ) : (
-                  <span className="text-xs text-slate-600 capitalize">{item.status}</span>
-                )}
-              </div>
-
-              <ArrowRight className="w-3.5 h-3.5 text-slate-700 group-hover:text-brand-400 transition-colors shrink-0" />
-            </Link>
-          )
-        })}
+        <div>
+          <label className="text-xs block mb-1" style={{ color: 'var(--text-subtle)' }}>Max records</label>
+          <select className="input-field text-sm py-1.5" value={String(filters.limit)}
+            onChange={(e) => onFilter({ ...filters, limit: parseInt(e.target.value) })}>
+            <option value="100">100</option>
+            <option value="500">500</option>
+            <option value="1000">1000</option>
+            <option value="2000">2000</option>
+          </select>
+        </div>
       </div>
     </div>
   )
 }
 
-// ─── Processing time stats ────────────────────────────────────────────────────
-
-function ProcessingStats({ stats, history }: {
-  stats: StatsResponse
-  history: PaginatedHistory
-}) {
-  // Compute min/max from history items (actual data, not fabricated)
-  const times = history.items
-    .filter((i) => i.processing_time_ms != null && i.status === 'completed')
-    .map((i) => i.processing_time_ms!)
-
-  const minTime = times.length ? Math.min(...times) : null
-  const maxTime = times.length ? Math.max(...times) : null
-
+// ── Section wrapper ───────────────────────────────────────────────────────────
+function Section({ title, icon, children, subtitle }: { title: string; icon: React.ReactNode; children: React.ReactNode; subtitle?: string }) {
   return (
-    <div className="glass-card p-6">
+    <div className="card p-5">
       <div className="flex items-center gap-2 mb-1">
-        <Clock className="w-4 h-4 text-slate-500" />
-        <h2 className="section-title">Processing Time</h2>
+        <span style={{ color: 'var(--brand)' }}>{icon}</span>
+        <h2 className="section-title">{title}</h2>
       </div>
-      <p className="text-xs text-slate-600 mb-5">
-        Wall-clock time from submission to completed response
-      </p>
-
-      <div className="grid grid-cols-3 gap-4 text-center">
-        <div className="rounded-xl bg-slate-800/40 py-4 px-3">
-          <div className="text-xl font-bold text-brand-400 font-mono">
-            {stats.avg_processing_ms > 0 ? formatMs(stats.avg_processing_ms) : '—'}
-          </div>
-          <div className="text-xs text-slate-600 mt-1">Average (all time)</div>
-        </div>
-        <div className="rounded-xl bg-slate-800/40 py-4 px-3">
-          <div className="text-xl font-bold text-emerald-400 font-mono">
-            {minTime != null ? formatMs(minTime) : '—'}
-          </div>
-          <div className="text-xs text-slate-600 mt-1">Fastest (recent)</div>
-        </div>
-        <div className="rounded-xl bg-slate-800/40 py-4 px-3">
-          <div className="text-xl font-bold text-amber-400 font-mono">
-            {maxTime != null ? formatMs(maxTime) : '—'}
-          </div>
-          <div className="text-xs text-slate-600 mt-1">Slowest (recent)</div>
-        </div>
-      </div>
-
-      <p className="text-xs text-slate-700 mt-4 text-center">
-        Average computed from all completed analyses in the database.
-        Min/max from the most recent {history.items.length} analyses.
-      </p>
+      {subtitle && <p className="text-xs mb-4" style={{ color: 'var(--text-subtle)' }}>{subtitle}</p>}
+      <div className={subtitle ? '' : 'mt-4'}>{children}</div>
     </div>
   )
 }
 
-// ─── Main page ────────────────────────────────────────────────────────────────
+// ── Empty state ───────────────────────────────────────────────────────────────
+function EmptyState({ msg }: { msg: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-8 gap-2" style={{ color: 'var(--text-faint)' }}>
+      <AlertCircle className="w-6 h-6 opacity-40" />
+      <p className="text-sm">{msg}</p>
+    </div>
+  )
+}
+
+// ── Insight card ──────────────────────────────────────────────────────────────
+function InsightCard({ insight }: { insight: Insight }) {
+  return (
+    <div className="card p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Lightbulb className="w-4 h-4" style={{ color: 'var(--brand)' }} />
+        <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{insight.category}</span>
+      </div>
+      <p className="text-sm leading-relaxed mb-2" style={{ color: 'var(--text-secondary)' }}>{insight.observation}</p>
+      {insight.caveat && (
+        <div className="flex items-start gap-1.5 mt-2 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+          <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-xs" style={{ color: 'var(--text-subtle)' }}>{insight.caveat}</p>
+        </div>
+      )}
+      <p className="text-xs mt-1 font-mono" style={{ color: 'var(--text-faint)' }}>Basis: {insight.data_basis}</p>
+    </div>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Analytics() {
-  const {
-    data: stats,
-    isLoading: statsLoading,
-    error: statsError,
-    refetch: statsRefetch,
-  } = useStats()
+  const [filters, setFilters] = useState<FilterState>({
+    source:    'live',
+    verdict:   '',
+    date_from: '',
+    date_to:   '',
+    limit:     500,
+  })
 
-  const {
-    data: history,
-    isLoading: histLoading,
-    error: histError,
-  } = useHistory({ page: 1, page_size: 20 })
+  const apiFilters = {
+    source:    filters.source,
+    verdict:   filters.verdict || undefined,
+    date_from: filters.date_from || undefined,
+    date_to:   filters.date_to || undefined,
+    limit:     filters.limit,
+  }
 
-  const isLoading = statsLoading || histLoading
-  const error     = statsError || histError
+  const { data: patterns, isLoading, refetch } = usePatterns(apiFilters)
+  const { data: temporal } = useTemporalTrend(apiFilters)
+  const { data: sentiment } = useSentiment(apiFilters)
+  const { data: wordFreq } = useWordFreq(apiFilters, 80)
+  const { data: topics }   = useTopics(apiFilters, 5)
 
-  if (isLoading && !stats) {
+  if (isLoading && !patterns) {
     return (
-      <div className="flex flex-col items-center justify-center py-32 gap-3">
-        <Spinner size="lg" />
-        <p className="text-sm text-slate-500">Loading analytics from PostgreSQL…</p>
+      <div className="page-content">
+        <div className="mb-7"><div className="h-7 w-56 skeleton mb-2" /><div className="h-4 w-72 skeleton" /></div>
+        <div className="grid lg:grid-cols-2 gap-6">
+          {Array.from({ length: 4 }).map((_, i) => <SkeletonChart key={i} className="h-64" />)}
+        </div>
       </div>
     )
   }
 
-  if (error && !stats) {
-    return (
-      <div className="max-w-xl mx-auto py-24 px-4">
-        <ErrorState
-          message={(error as Error).message}
-          onRetry={() => statsRefetch()}
-        />
-      </div>
-    )
-  }
-
-  if (!stats) return null
+  const data = patterns as PatternsResponse | undefined
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 animate-fade-in">
-
-      {/* ── Header ──────────────────────────────────────────────────────── */}
+    <div className="page-content">
+      {/* Header */}
       <div className="flex items-start justify-between mb-7">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100 mb-1">Analytics</h1>
-          <p className="text-sm text-slate-500">
-            All values computed from live PostgreSQL data — no hardcoded statistics.
-          </p>
+        <div className="flex items-start gap-4">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-500 to-violet-600 flex items-center justify-center shrink-0">
+            <BarChart3 className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <h1 className="page-title mb-1">Misinformation Pattern Analysis</h1>
+            <p className="text-sm" style={{ color: 'var(--text-subtle)' }}>
+              Real-time pattern detection from {data?.document_count ?? 0} documents · all metrics from actual data
+            </p>
+          </div>
         </div>
-        <button
-          onClick={() => statsRefetch()}
-          className="p-2 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors"
-          title="Refresh"
-        >
+        <button onClick={() => refetch()} className="btn-ghost" title="Refresh">
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>
 
-      {/* ── KPI grid ────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-7">
-        <KpiCard
-          icon={<Database className="w-4 h-4 text-brand-400" />}
-          label="Total Analyses"
-          value={stats.total_analyses.toLocaleString()}
-          color="text-brand-400"
-        />
-        <KpiCard
-          icon={<CheckCircle className="w-4 h-4 text-emerald-400" />}
-          label="Completed"
-          value={stats.completed.toLocaleString()}
-          sub={stats.total_analyses > 0
-            ? `${((stats.completed / stats.total_analyses) * 100).toFixed(0)}% success rate`
-            : undefined}
-          color="text-emerald-400"
-        />
-        <KpiCard
-          icon={<XCircle className="w-4 h-4 text-red-400" />}
-          label="Failed"
-          value={stats.failed.toLocaleString()}
-          color="text-red-400"
-        />
-        <KpiCard
-          icon={<AlertCircle className="w-4 h-4 text-amber-400" />}
-          label="Pending"
-          value={stats.pending.toLocaleString()}
-          color="text-amber-400"
-        />
-        <KpiCard
-          icon={<TrendingUp className="w-4 h-4 text-violet-400" />}
-          label="Avg Confidence"
-          value={`${(stats.avg_confidence * 100).toFixed(1)}%`}
-          sub="ML ensemble"
-          color="text-violet-400"
-        />
-        <KpiCard
-          icon={<Clock className="w-4 h-4 text-sky-400" />}
-          label="Avg Process Time"
-          value={stats.avg_processing_ms > 0 ? formatMs(stats.avg_processing_ms) : '—'}
-          sub="DB aggregate"
-          color="text-sky-400"
-        />
-      </div>
+      {/* Filters */}
+      <FilterBar filters={filters} onFilter={setFilters} />
 
-      {/* ── Assessment distribution + evidence ──────────────────────────── */}
-      <div className="grid lg:grid-cols-2 gap-6 mb-6">
-        <AssessmentDistribution stats={stats} />
-        {history && <EvidenceAvailability history={history} />}
-      </div>
+      {data?.error ? (
+        <div className="card p-6 text-center" style={{ color: 'var(--text-subtle)' }}>
+          <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-40" />
+          <p className="text-sm">{data.error}</p>
+        </div>
+      ) : (data?.document_count ?? 0) === 0 ? (
+        <div className="card p-10 text-center space-y-3">
+          <Database className="w-10 h-10 mx-auto opacity-20" style={{ color: 'var(--text-faint)' }} />
+          <p className="text-sm" style={{ color: 'var(--text-subtle)' }}>
+            No records found matching the current filters.
+          </p>
+          <p className="text-xs" style={{ color: 'var(--text-faint)' }}>
+            Submit articles through the analysis pipeline, or switch the source to "Dataset (ISOT)".
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* ── Row 1: Verdict distribution + Sentiment ─────────────────────── */}
+          <div className="grid lg:grid-cols-2 gap-6 mb-6">
+            {/* Verdict distribution */}
+            <Section title="Fake vs Real Distribution" icon={<PieChartIcon className="w-5 h-5" />}
+              subtitle="Classification label distribution across analysed documents">
+              {data?.verdict_distribution?.counts && Object.keys(data.verdict_distribution.counts).length > 0 ? (
+                <div className="grid sm:grid-cols-2 gap-4 items-center">
+                  <ResponsiveContainer width="100%" height={160}>
+                    <PieChart>
+                      <Pie data={Object.entries(data.verdict_distribution.counts).map(([k, v]) => ({
+                        name: k,
+                        value: v as number,
+                        fill: k === 'FAKE' ? '#f87171' : k === 'REAL' ? '#34d399' : k === 'MIXED' ? '#fbbf24' : '#94a3b8',
+                      }))} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={3} dataKey="value">
+                        {Object.entries(data.verdict_distribution.counts).map(([k], i) => (
+                          <Cell key={i} fill={k === 'FAKE' ? '#f87171' : k === 'REAL' ? '#34d399' : k === 'MIXED' ? '#fbbf24' : '#94a3b8'} />
+                        ))}
+                      </Pie>
+                      <Tooltip {...TT} />
+                      <Legend iconType="circle" iconSize={8} formatter={(v) => <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>{v}</span>} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="space-y-2">
+                    {Object.entries(data.verdict_distribution.counts).map(([k, v]) => (
+                      <div key={k} className="flex justify-between text-sm">
+                        <span style={{ color: 'var(--text-secondary)' }}>{k}</span>
+                        <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{v as number}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between text-sm pt-1" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                      <span style={{ color: 'var(--text-subtle)' }}>Total</span>
+                      <span className="font-mono font-bold" style={{ color: 'var(--brand)' }}>{data.verdict_distribution.total}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : <EmptyState msg="No verdict data available" />}
+            </Section>
 
-      {/* ── Processing time + recent ────────────────────────────────────── */}
-      <div className="grid lg:grid-cols-2 gap-6 mb-6">
-        {history && <ProcessingStats stats={stats} history={history} />}
-        {history && <RecentAnalyses history={history} />}
-      </div>
+            {/* Sentiment */}
+            <Section title="Sentiment Distribution" icon={<Activity className="w-5 h-5" />}
+              subtitle={sentiment?.all?.method ? `Method: ${sentiment.all.method}` : 'VADER sentiment analysis'}>
+              {sentiment?.all?.distribution?.length ? (
+                <>
+                  <ResponsiveContainer width="100%" height={140}>
+                    <BarChart data={sentiment.all.distribution} margin={{ top: 4, right: 10, bottom: 4, left: -20 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} tickLine={false} axisLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: 'var(--text-faint)' }} tickLine={false} axisLine={false} unit="%" />
+                      <Tooltip {...TT} />
+                      <Bar dataKey="pct" radius={[4, 4, 0, 0]}>
+                        {sentiment.all.distribution.map((d: { label: string; count: number; pct: number }, i: number) => (
+                          <Cell key={i} fill={d.label === 'positive' ? '#34d399' : d.label === 'negative' ? '#f87171' : '#94a3b8'} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div className="flex justify-between text-xs mt-2">
+                    <span style={{ color: 'var(--text-subtle)' }}>Avg compound score:</span>
+                    <span className="font-mono" style={{ color: sentiment.all.avg_compound > 0 ? '#34d399' : sentiment.all.avg_compound < 0 ? '#f87171' : 'var(--text-subtle)' }}>
+                      {sentiment.all.avg_compound.toFixed(4)}
+                    </span>
+                  </div>
+                </>
+              ) : <EmptyState msg="No sentiment data" />}
+            </Section>
+          </div>
 
-      {/* ── Data source note ─────────────────────────────────────────────── */}
-      <div className="glass-card p-4 flex items-start gap-3">
-        <Database className="w-4 h-4 text-slate-600 shrink-0 mt-0.5" />
-        <p className="text-xs text-slate-600 leading-relaxed">
-          All metrics are computed by live SQL queries against PostgreSQL on every page load.
-          <strong className="text-slate-500"> No values are hardcoded or estimated.</strong>{' '}
-          Average processing time is an aggregate across all completed analyses.
-          Min/max are derived from the most recent {history?.items.length ?? 20} analyses.
-        </p>
-      </div>
+          {/* ── Row 2: Word cloud + Word freq bar ────────────────────────────── */}
+          <div className="grid lg:grid-cols-2 gap-6 mb-6">
+            {/* Word cloud */}
+            <Section title="Word Frequency Cloud" icon={<Type className="w-5 h-5" />}
+              subtitle="Most frequent terms — size = frequency, colour = label">
+              {wordFreq?.all?.length ? (
+                <WordCloud words={wordFreq.all} label="all" maxWords={40} height={250} />
+              ) : <EmptyState msg="No word frequency data" />}
+            </Section>
+
+            {/* Top fake vs real terms */}
+            <Section title="Most Common Terms by Label" icon={<Hash className="w-5 h-5" />}
+              subtitle="Top 15 words in FAKE vs REAL labelled content">
+              {wordFreq && (wordFreq.FAKE?.length || wordFreq.REAL?.length) ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-xs font-semibold text-red-400 mb-2">FAKE</div>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={wordFreq.FAKE.slice(0, 10)} layout="vertical" margin={{ left: 60, right: 5, top: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                        <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-faint)' }} tickLine={false} axisLine={false} />
+                        <YAxis type="category" dataKey="word" tick={{ fontSize: 10, fill: 'var(--text-secondary)', fontFamily: 'monospace' }} tickLine={false} axisLine={false} width={60} />
+                        <Tooltip {...TT} formatter={(v: number) => [v, 'count']} />
+                        <Bar dataKey="count" fill="#f87171" radius={[0, 3, 3, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-emerald-400 mb-2">REAL</div>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={wordFreq.REAL.slice(0, 10)} layout="vertical" margin={{ left: 60, right: 5, top: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                        <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-faint)' }} tickLine={false} axisLine={false} />
+                        <YAxis type="category" dataKey="word" tick={{ fontSize: 10, fill: 'var(--text-secondary)', fontFamily: 'monospace' }} tickLine={false} axisLine={false} width={60} />
+                        <Tooltip {...TT} formatter={(v: number) => [v, 'count']} />
+                        <Bar dataKey="count" fill="#34d399" radius={[0, 3, 3, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              ) : <EmptyState msg="No label-grouped word data" />}
+            </Section>
+          </div>
+
+          {/* ── Row 3: Temporal trend + Article length ──────────────────────── */}
+          <div className="grid lg:grid-cols-2 gap-6 mb-6">
+            {/* Temporal */}
+            <Section title="Temporal Distribution" icon={<Clock className="w-5 h-5" />}
+              subtitle="Article count by date — stacked by verdict">
+              {temporal?.series?.length >= 2 ? (
+                <ResponsiveContainer width="100%" height={180}>
+                  <AreaChart data={temporal.series} margin={{ top: 4, right: 10, bottom: 4, left: -20 }}>
+                    <defs>
+                      <linearGradient id="gT" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#818cf8" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#818cf8" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-faint)' }} tickLine={false} axisLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: 'var(--text-faint)' }} tickLine={false} axisLine={false} allowDecimals={false} />
+                    <Tooltip {...TT} />
+                    <Area type="monotone" dataKey="total" stroke="#818cf8" fill="url(#gT)" strokeWidth={2} dot={false} name="Total" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : <EmptyState msg="Insufficient temporal data (need ≥ 2 date points)" />}
+            </Section>
+
+            {/* Article length */}
+            <Section title="Article Length Distribution" icon={<FileText className="w-5 h-5" />}
+              subtitle={data?.text_length?.observation}>
+              {data?.text_length?.histogram?.length ? (
+                <>
+                  <ResponsiveContainer width="100%" height={140}>
+                    <BarChart data={data.text_length.histogram} margin={{ top: 4, right: 10, bottom: 4, left: -20 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="bucket" tick={{ fontSize: 10, fill: 'var(--text-faint)' }} tickLine={false} axisLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: 'var(--text-faint)' }} tickLine={false} axisLine={false} allowDecimals={false} />
+                      <Tooltip {...TT} />
+                      <Bar dataKey="count" fill="var(--brand)" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                  {data.text_length.by_label && (
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                      {Object.entries(data.text_length.by_label).map(([label, stats]) => (
+                        <div key={label} className="rounded-lg p-3" style={{ backgroundColor: 'var(--bg-surface-2)' }}>
+                          <div className={cn('text-xs font-semibold mb-1', label === 'FAKE' ? 'text-red-400' : 'text-emerald-400')}>{label}</div>
+                          <div className="text-xs space-y-0.5" style={{ color: 'var(--text-subtle)' }}>
+                            <div className="flex justify-between"><span>Chars</span><span className="font-mono">{(stats as any).char?.mean ?? '—'}</span></div>
+                            <div className="flex justify-between"><span>Words</span><span className="font-mono">{(stats as any).word?.mean ?? '—'}</span></div>
+                            <div className="flex justify-between"><span>Count</span><span className="font-mono">{(stats as any).count ?? '—'}</span></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : <EmptyState msg="No length data" />}
+            </Section>
+          </div>
+
+          {/* ── Row 4: N-grams + Source distribution ────────────────────────── */}
+          <div className="grid lg:grid-cols-2 gap-6 mb-6">
+            {/* Bigrams */}
+            <Section title="Most Frequent Bigrams" icon={<Hash className="w-5 h-5" />}
+              subtitle="Top 2-word phrases across all content">
+              {data?.ngrams?.bigrams?.length ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={data.ngrams.bigrams.slice(0, 10)} layout="vertical" margin={{ left: 90, right: 10, top: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-faint)' }} tickLine={false} axisLine={false} />
+                    <YAxis type="category" dataKey="ngram" tick={{ fontSize: 10, fill: 'var(--text-secondary)', fontFamily: 'monospace' }} tickLine={false} axisLine={false} width={90} />
+                    <Tooltip {...TT} formatter={(v: number) => [v, 'count']} />
+                    <Bar dataKey="count" fill="#a78bfa" radius={[0, 3, 3, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : <EmptyState msg="No n-gram data" />}
+            </Section>
+
+            {/* Source distribution */}
+            <Section title="Source Distribution" icon={<Database className="w-5 h-5" />}
+              subtitle="Evidence sources by publisher">
+              {data?.source_distribution?.length ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={data.source_distribution.slice(0, 8)} layout="vertical" margin={{ left: 90, right: 10, top: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-faint)' }} tickLine={false} axisLine={false} />
+                    <YAxis type="category" dataKey="source" tick={{ fontSize: 10, fill: 'var(--text-secondary)' }} tickLine={false} axisLine={false} width={90} />
+                    <Tooltip {...TT} />
+                    <Bar dataKey="count" fill="#60a5fa" radius={[0, 3, 3, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : <EmptyState msg="No evidence sources retrieved" />}
+            </Section>
+          </div>
+
+          {/* ── Row 5: LDA topics + Repeated claims ─────────────────────────── */}
+          <div className="grid lg:grid-cols-2 gap-6 mb-6">
+            {/* LDA topics */}
+            <Section title="Topic Distribution (LDA)" icon={<Layers className="w-5 h-5" />}
+              subtitle={topics?.note ?? 'Latent topic discovery'}>
+              {topics?.topics?.length ? (
+                <div className="space-y-3">
+                  {topics.topics.map((topic: import('@/types/api').LDATopic) => (
+                    <div key={topic.topic_id} className="rounded-lg p-3" style={{ backgroundColor: 'var(--bg-surface-2)' }}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold" style={{ color: 'var(--brand)' }}>
+                          Topic {topic.topic_id + 1}: {topic.label}
+                        </span>
+                        <span className="text-xs font-mono" style={{ color: 'var(--text-faint)' }}>
+                          {topic.doc_count} docs
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {topic.words.slice(0, 8).map((w: import('@/types/api').LDAWord, i: number) => (
+                          <span key={i} className="text-xs px-2 py-0.5 rounded font-mono"
+                            style={{ backgroundColor: `${MODEL_COLORS[topic.topic_id % MODEL_COLORS.length]}20`, color: MODEL_COLORS[topic.topic_id % MODEL_COLORS.length] }}>
+                            {w.word}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {topics.perplexity != null && (
+                    <p className="text-xs" style={{ color: 'var(--text-faint)' }}>Perplexity: {topics.perplexity} (lower = better fit)</p>
+                  )}
+                </div>
+              ) : <EmptyState msg={topics?.note ?? 'Insufficient documents for LDA (need ≥ 20)'} />}
+            </Section>
+
+            {/* Repeated claims */}
+            <Section title="Repeated / Similar Claims" icon={<AlertCircle className="w-5 h-5" />}
+              subtitle="Near-duplicate articles detected by TF-IDF cosine similarity">
+              {data?.repeated_claims?.length ? (
+                <div className="space-y-3">
+                  {data.repeated_claims.slice(0, 5).map((rc) => (
+                    <div key={rc.group_id} className="rounded-lg p-3" style={{ backgroundColor: 'var(--bg-surface-2)' }}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-bold px-2 py-0.5 rounded text-amber-400" style={{ backgroundColor: 'rgba(251,191,36,0.1)' }}>
+                          {rc.count} articles
+                        </span>
+                        <span className="text-xs font-mono" style={{ color: 'var(--text-faint)' }}>
+                          similarity: {(rc.similarity * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                      <p className="text-xs line-clamp-2" style={{ color: 'var(--text-secondary)' }}>{rc.representative}</p>
+                      <p className="text-xs mt-1 font-mono" style={{ color: 'var(--text-faint)' }}>IDs: {rc.ids.join(', ')}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : <EmptyState msg="No repeated claims detected" />}
+            </Section>
+          </div>
+
+          {/* ── Row 6: Linguistic features ──────────────────────────────────── */}
+          {data?.linguistic_features?.all && Object.keys(data.linguistic_features.all).length > 0 && (
+            <Section title="Linguistic Features" icon={<Type className="w-5 h-5" />}
+              subtitle="Stylometric features — computed from raw text, correlational only">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                {[
+                  ['Avg word length', `${(data.linguistic_features.all as any).avg_word_length ?? '—'} chars`],
+                  ['Type-token ratio', (data.linguistic_features.all as any).type_token_ratio ?? '—'],
+                  ['Avg sentence len', `${(data.linguistic_features.all as any).avg_sentence_length ?? '—'} words`],
+                  ['Uppercase ratio', `${(((data.linguistic_features.all as any).uppercase_ratio ?? 0) * 100).toFixed(1)}%`],
+                  ['Exclam. rate', `${(data.linguistic_features.all as any).exclamation_rate ?? 0}/1k chars`],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-lg p-3 text-center" style={{ backgroundColor: 'var(--bg-surface-2)' }}>
+                    <div className="text-lg font-bold" style={{ color: 'var(--brand)' }}>{value}</div>
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--text-subtle)' }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
+
+          {/* ── Research insights ────────────────────────────────────────────── */}
+          <div className="mt-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Lightbulb className="w-5 h-5" style={{ color: 'var(--brand)' }} />
+              <h2 className="section-title">Research Insights</h2>
+              <span className="text-xs" style={{ color: 'var(--text-faint)' }}>
+                — derived from actual computed statistics
+              </span>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-4">
+              {data?.insights?.length ? (
+                data.insights.map((insight, i) => <InsightCard key={i} insight={insight} />)
+              ) : (
+                <div className="card p-6 text-center" style={{ color: 'var(--text-faint)' }}>
+                  <p className="text-sm">Insufficient data for insights. Submit more articles to enable pattern detection.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Data integrity footer ────────────────────────────────────────── */}
+          <div className="mt-6 card p-4 flex items-start gap-3">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+            <div className="text-xs leading-relaxed space-y-1" style={{ color: 'var(--text-subtle)' }}>
+              <p>
+                <strong style={{ color: 'var(--text-secondary)' }}>Research integrity:</strong>{' '}
+                All statistics on this page are computed from actual data — nothing is fabricated or estimated.
+                Insights explicitly distinguish dataset-level correlations from causal conclusions.
+              </p>
+              <p>
+                <strong style={{ color: 'var(--text-secondary)' }}>Data source:</strong>{' '}
+                {data?.source === 'live' ? 'Live analysis history (PostgreSQL)' : data?.source === 'dataset' ? 'ISOT training data' : 'Combined live + dataset'}
+                · {data?.document_count ?? 0} documents · computed at {data?.computed_at ? new Date(data.computed_at).toLocaleTimeString() : '—'}
+              </p>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

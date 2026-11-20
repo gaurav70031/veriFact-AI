@@ -124,6 +124,29 @@ def _compute_ensemble_verdict(
     return verdict, round(confidence, 6), round(avg_fake, 6), round(avg_real, 6)
 
 
+def _detect_toy_data_models() -> Optional[str]:
+    """
+    Return a warning string if models appear to be trained on toy/synthetic data.
+    Toy data is identified by an unusually small TF-IDF vocabulary (< 100 terms).
+    Returns None when models appear properly trained.
+    """
+    try:
+        from ml.baseline.inference import get_pipeline
+        pipeline = get_pipeline("logistic_regression")
+        vocab_size = len(pipeline.named_steps["tfidf"].vocabulary_)
+        if vocab_size < 100:
+            return (
+                f"Models were trained on a small synthetic dataset "
+                f"(TF-IDF vocabulary: {vocab_size} terms). "
+                "ML predictions will be unreliable (near 50/50). "
+                "Download the ISOT dataset and run python scripts/train_baseline.py "
+                "to get meaningful predictions."
+            )
+    except Exception:
+        pass
+    return None
+
+
 # =============================================================================
 # ML inference
 # =============================================================================
@@ -218,9 +241,9 @@ async def _generate_explanations(
 
 async def _safe_retrieve_evidence(claim: str) -> Optional[EvidenceResult]:
     try:
-        # Use a 90-day window so recent political/news events aren't missed,
-        # and request more results so the relevance filter has more to work with.
-        return await retrieve_evidence(claim, max_results=15, from_days=90)
+        # Use a 365-day window to cover more historical events.
+        # Request more results so the relevance filter has more to work with.
+        return await retrieve_evidence(claim, max_results=20, from_days=365)
     except Exception as exc:
         logger.warning("Evidence retrieval failed for '%s…': %s", claim[:60], exc)
         return None
@@ -353,18 +376,48 @@ async def _persist_full_analysis(
     claim_results:      list[ClaimVerdictResult],
     ev_pairs_per_claim: list[list[tuple[EvidenceSource, ComparisonResult]]],
     verdict:            AnalysisVerdict,
-    explanations:       dict[str, ExplanationResult],   # NEW
+    explanations:       dict[str, ExplanationResult],
+    gemini_verdicts:    list = None,
 ) -> Analysis:
     ml_label, ml_conf, ml_fake, ml_real = _compute_ensemble_verdict(predictions)
 
     analysis.final_verdict    = FinalVerdict(ml_label)
     analysis.final_confidence = ml_conf
     analysis.status           = AnalysisStatus.COMPLETED
-    analysis.summary = (
-        f"ML: {ml_label} ({ml_conf:.0%}) — "
-        f"Evidence: {verdict.overall_evidence_assessment.value}. "
-        f"{verdict.overall_explanation}"
-    )
+
+    # Detect toy-data models and include warning in summary
+    toy_warning = _detect_toy_data_models()
+    if toy_warning:
+        analysis.summary = (
+            f"⚠ MODEL QUALITY WARNING: {toy_warning} | "
+            f"ML (unreliable): {ml_label} ({ml_conf:.0%}) — "
+            f"Evidence: {verdict.overall_evidence_assessment.value}. "
+            f"{verdict.overall_explanation}"
+        )
+    else:
+        analysis.summary = (
+            f"ML: {ml_label} ({ml_conf:.0%}) — "
+            f"Evidence: {verdict.overall_evidence_assessment.value}. "
+            f"{verdict.overall_explanation}"
+        )
+
+    # ── Gemini override: if Gemini returned a verdict, it becomes primary ────
+    if gemini_verdicts:
+        primary_gv = next((gv for gv in gemini_verdicts if gv.is_available), None)
+        if primary_gv:
+            gemini_final = primary_gv.final_verdict_label
+            analysis.final_verdict    = FinalVerdict(gemini_final)
+            analysis.final_confidence = primary_gv.confidence
+            analysis.summary = (
+                f"Gemini: {primary_gv.verdict} ({primary_gv.confidence:.0%}) — "
+                f"{primary_gv.explanation} "
+                f"| ML signal: {ml_label} ({ml_conf:.0%}) "
+                f"| Evidence: {verdict.overall_evidence_assessment.value}"
+            )
+            logger.info(
+                "Final verdict overridden by Gemini: %s (%.0f%%)",
+                gemini_final, primary_gv.confidence * 100,
+            )
 
     # ── Prediction rows (with explanation_json) ───────────────────────────────
     for model_id, pred in predictions.items():
@@ -457,7 +510,8 @@ def _build_response(
     ev_results:         list[Optional[EvidenceResult]],
     ev_pairs_per_claim: list[list[tuple[EvidenceSource, ComparisonResult]]],
     verdict:            AnalysisVerdict,
-    explanations:       dict[str, ExplanationResult],   # NEW
+    explanations:       dict[str, ExplanationResult],
+    gemini_verdicts:    list,
 ) -> AnalysisResponse:
     ml_label, ml_conf, _, _ = _compute_ensemble_verdict(predictions)
 
@@ -554,6 +608,9 @@ def _build_response(
         ),
     )
 
+    # ── Gemini fields ─────────────────────────────────────────────────────────
+    primary_gv = next((gv for gv in gemini_verdicts if gv.is_available), None) if gemini_verdicts else None
+
     return AnalysisResponse(
         id=analysis.id,
         input_type=analysis.input_type.value,
@@ -562,6 +619,10 @@ def _build_response(
         article_title=analysis.article_title,
         ml_verdict=ml_label,
         ml_confidence=ml_conf,
+        gemini_verdict=primary_gv.verdict if primary_gv else None,
+        gemini_confidence=primary_gv.confidence if primary_gv else None,
+        gemini_explanation=primary_gv.explanation if primary_gv else None,
+        gemini_available=primary_gv is not None,
         evidence_verdict=verdict.overall_evidence_assessment.value,
         evidence_explanation=verdict.overall_explanation,
         model_predictions=model_preds,
@@ -628,6 +689,39 @@ async def _run_full_pipeline(
         extracted_claims
     )
 
+    # ── Step 3.5: Gemini fact-check (direct call, single claim — most common case)
+    from app.services.gemini_service import get_gemini_verdict, is_gemini_configured
+    _configured = is_gemini_configured()
+    logger.info("[gemini] is_configured=%s", _configured)
+    gemini_verdicts: list = []
+    if _configured and extracted_claims:
+        ec = extracted_claims[0]
+        ev_result = ev_results[0] if ev_results else None
+        snippets = []
+        if ev_result and ev_result.items:
+            for item in ev_result.items[:8]:
+                snippets.append({
+                    "source":       item.source_name,
+                    "title":        item.title or "",
+                    "snippet":      item.description or "",
+                    "relationship": getattr(item, "relationship", ""),
+                })
+        logger.info("[gemini] calling get_gemini_verdict for claim: %s", ec.text[:60])
+        gv = await get_gemini_verdict(ec.text, snippets)
+        gemini_verdicts = [gv]
+        logger.info("[gemini] result: verdict=%s available=%s error=%s",
+                     gv.verdict, gv.is_available, gv.error)
+        for ec, gv in zip(extracted_claims, gemini_verdicts):
+            if gv.is_available:
+                logger.info(
+                    "[gemini] claim=%r  verdict=%s  conf=%.2f",
+                    ec.text[:60], gv.verdict, gv.confidence,
+                )
+            else:
+                logger.warning("[gemini] unavailable: %s", gv.error)
+    else:
+        logger.info("[gemini] not configured — skipping Gemini fact-check")
+
     # ── Step 4: Evidence comparison ───────────────────────────────────────────
     claim_results:      list[ClaimVerdictResult]                            = []
     ev_pairs_per_claim: list[list[tuple[EvidenceSource, ComparisonResult]]] = []
@@ -670,6 +764,7 @@ async def _run_full_pipeline(
         ev_pairs_per_claim=ev_pairs_per_claim,
         verdict=verdict,
         explanations=explanations,
+        gemini_verdicts=gemini_verdicts,
     )
     analysis.processing_time_ms = int((time.perf_counter() - t0) * 1000)
 
@@ -683,6 +778,7 @@ async def _run_full_pipeline(
         ev_pairs_per_claim=ev_pairs_per_claim,
         verdict=verdict,
         explanations=explanations,
+        gemini_verdicts=gemini_verdicts,
     )
 
 

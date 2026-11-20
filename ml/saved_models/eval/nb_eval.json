@@ -1,0 +1,36 @@
+{
+  "model_id": "naive_bayes",
+  "test_samples": 3908,
+  "accuracy": 0.961105,
+  "macro_f1": 0.959593,
+  "weighted_f1": 0.961169,
+  "macro_precision": 0.958152,
+  "macro_recall": 0.961178,
+  "roc_auc": 0.993825,
+  "per_class": {
+    "FAKE": {
+      "precision": 0.974093,
+      "recall": 0.960818,
+      "f1": 0.96741,
+      "support": 2348
+    },
+    "REAL": {
+      "precision": 0.942211,
+      "recall": 0.961538,
+      "f1": 0.951777,
+      "support": 1560
+    }
+  },
+  "confusion_matrix": [
+    [
+      2256,
+      92
+    ],
+    [
+      60,
+      1500
+    ]
+  ],
+  "inference_time_ms": 2055.669,
+  "per_sample_ms": 0.526
+}

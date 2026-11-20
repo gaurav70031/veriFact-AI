@@ -84,25 +84,54 @@ def remove_near_duplicates(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return df, removed
 
 
+def remove_cross_label_duplicates(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """
+    Remove rows whose text appears under more than one label.
+
+    When the same article is filed as both FAKE and REAL (as occurs in the
+    ISOT dataset), it is ambiguous and should not be used for training.
+    All rows for that text are dropped.
+
+    Returns
+    -------
+    (clean_df, n_removed)
+    """
+    before = len(df)
+    # Count how many distinct labels each text has
+    label_counts = df.groupby("text")["label"].nunique()
+    ambiguous_texts = label_counts[label_counts > 1].index
+    df = df[~df["text"].isin(ambiguous_texts)].reset_index(drop=True)
+    removed = before - len(df)
+    if removed:
+        logger.info(
+            "Cross-label dedup: removed %d rows with conflicting labels (%d → %d)",
+            removed, before, len(df),
+        )
+    return df, removed
+
+
 def deduplicate(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     """
-    Run both exact and near-duplicate removal.
+    Run exact dedup, near-dup removal, and cross-label dedup.
 
     Returns
     -------
     (clean_df, report_dict)
-        report_dict keys: "exact_removed", "near_removed", "total_removed"
+        report_dict keys: "exact_removed", "near_removed", "cross_label_removed",
+                          "total_removed"
     """
     df, exact = remove_exact_duplicates(df)
     df, near  = remove_near_duplicates(df)
+    df, cross = remove_cross_label_duplicates(df)
     report = {
-        "exact_removed": exact,
-        "near_removed":  near,
-        "total_removed": exact + near,
+        "exact_removed":       exact,
+        "near_removed":        near,
+        "cross_label_removed": cross,
+        "total_removed":       exact + near + cross,
     }
     logger.info(
-        "Deduplication summary: exact=%d  near=%d  total=%d  remaining=%d",
-        exact, near, exact + near, len(df),
+        "Deduplication summary: exact=%d  near=%d  cross_label=%d  total=%d  remaining=%d",
+        exact, near, cross, exact + near + cross, len(df),
     )
     return df, report
 

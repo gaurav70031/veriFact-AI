@@ -1,0 +1,92 @@
+{
+  "dataset_name": "Fake.csv+True.csv",
+  "source_files": [
+    "ml\\datasets\\raw\\Fake.csv",
+    "ml\\datasets\\raw\\True.csv"
+  ],
+  "cleaning_mode": "baseline",
+  "started_at": "2026-11-20T11:35:54.241647+00:00",
+  "completed_at": "2026-11-20T11:36:33.061243+00:00",
+  "total_steps": 6,
+  "total_dropped": 5825,
+  "steps": [
+    {
+      "step": 1,
+      "operation": "load",
+      "timestamp": "2026-11-20T11:35:55.702584+00:00",
+      "rows_before": 0,
+      "rows_after": 44898,
+      "dropped": 0,
+      "retained": 44898,
+      "params": {
+        "files": [
+          "ml\\datasets\\raw\\Fake.csv",
+          "ml\\datasets\\raw\\True.csv"
+        ]
+      }
+    },
+    {
+      "step": 2,
+      "operation": "label_normalisation",
+      "timestamp": "2026-11-20T11:35:55.735871+00:00",
+      "rows_before": 44898,
+      "rows_after": 44898,
+      "dropped": 0,
+      "retained": 44898
+    },
+    {
+      "step": 3,
+      "operation": "text_cleaning",
+      "timestamp": "2026-11-20T11:36:13.851105+00:00",
+      "rows_before": 44898,
+      "rows_after": 44889,
+      "dropped": 9,
+      "retained": 44889,
+      "params": {
+        "mode": "baseline",
+        "lemmatize": false
+      }
+    },
+    {
+      "step": 4,
+      "operation": "deduplication",
+      "timestamp": "2026-11-20T11:36:18.135970+00:00",
+      "rows_before": 44889,
+      "rows_after": 39073,
+      "dropped": 5816,
+      "retained": 39073,
+      "params": {
+        "exact_removed": 5816,
+        "near_removed": 0,
+        "cross_label_removed": 0,
+        "total_removed": 5816
+      }
+    },
+    {
+      "step": 5,
+      "operation": "split",
+      "timestamp": "2026-11-20T11:36:28.071413+00:00",
+      "rows_before": 39073,
+      "rows_after": 39073,
+      "dropped": 0,
+      "retained": 39073,
+      "params": {
+        "train": 31257,
+        "val": 3908,
+        "test": 3908,
+        "test_size": 0.1,
+        "val_size": 0.1,
+        "random_seed": 42
+      }
+    },
+    {
+      "step": 6,
+      "operation": "statistics",
+      "timestamp": "2026-11-20T11:36:29.496906+00:00",
+      "rows_before": 39073,
+      "rows_after": 39073,
+      "dropped": 0,
+      "retained": 39073
+    }
+  ]
+}

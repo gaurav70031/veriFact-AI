@@ -1,0 +1,53 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# VeriFact AI — ML Engine Requirements
+# ══════════════════════════════════════════════════════════════════════════════
+# Install with:
+#   pip install -r ml/requirements.txt
+#
+# For CPU-only training (no GPU):
+#   pip install -r ml/requirements.txt
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#
+# For CUDA 12.x (recommended for training):
+#   pip install -r ml/requirements.txt
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# ISOT Dataset download:
+#   https://www.kaggle.com/datasets/clmentbisaillon/fake-and-real-news-dataset
+#   Place Fake.csv and True.csv in: ml/datasets/raw/
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Core scientific stack ─────────────────────────────────────────────────────
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+joblib>=1.4.0
+
+# ── Deep learning (CPU wheels — replace with CUDA version for GPU training) ───
+# See: https://pytorch.org/get-started/locally/
+torch>=2.2.0
+torchvision>=0.17.0
+
+# ── Transformers ──────────────────────────────────────────────────────────────
+transformers>=4.40.0        # DistilBERT, BERT, RoBERTa via AutoModel
+tokenizers>=0.19.0          # Rust-backed fast tokenizers (dependency of transformers)
+safetensors>=0.4.0          # Safe weights format (alternative to pytorch_model.bin)
+accelerate>=0.29.0          # Trainer acceleration + mixed precision helpers
+huggingface-hub>=0.23.0     # Model card + weight downloading
+
+# ── Explainability ────────────────────────────────────────────────────────────
+lime>=0.2.0.1               # LIME for TF-IDF baseline explanations
+
+# ── NLP utilities ─────────────────────────────────────────────────────────────
+nltk>=3.8.0                 # Tokenization, stopwords (used in stats.py + cleaning)
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+tqdm>=4.66.0                # Progress bars in training loops
+python-dotenv>=1.0.0        # Load .env for environment variable configuration
+requests>=2.32.0            # HTTP client for predict_url() fallback
+
+# ── Dev / analysis extras (optional — not required for inference) ─────────────
+# matplotlib>=3.9.0         # Visualise training curves
+# seaborn>=0.13.0           # Confusion matrix heatmaps
+# scipy>=1.13.0             # Statistical tests
+# ipykernel>=6.29.0         # Jupyter notebook support

@@ -1,28 +1,55 @@
-import { Outlet } from 'react-router-dom'
-import { Navbar } from './Navbar'
+import { Outlet, useLocation } from 'react-router-dom'
+import { Sidebar, MobileTopBar } from './Sidebar'
+
+/** Pages that use a full-bleed "auth" layout (no sidebar) */
+const AUTH_PATHS = ['/login', '/register']
 
 export function Layout() {
-  return (
-    <div className="min-h-screen flex flex-col
-                    bg-gray-50 text-slate-900
-                    dark:bg-slate-950 dark:text-slate-100
-                    transition-colors duration-300">
-      <Navbar />
-      <main className="flex-1">
+  const { pathname } = useLocation()
+  const isAuth = AUTH_PATHS.includes(pathname)
+
+  if (isAuth) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center p-4"
+        style={{ backgroundColor: 'var(--bg-page)' }}
+      >
         <Outlet />
-      </main>
-      <footer className="border-t border-gray-200 dark:border-slate-800/60 py-6 mt-16
-                         transition-colors duration-300">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8
-                        flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p className="text-xs text-slate-400 dark:text-slate-600">
-            VeriFact AI — Fake News Detection Platform &copy; {new Date().getFullYear()}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className="min-h-screen flex"
+      style={{ backgroundColor: 'var(--bg-page)' }}
+    >
+      {/* Desktop sidebar */}
+      <Sidebar />
+
+      {/* Main column */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Mobile top bar */}
+        <MobileTopBar />
+
+        {/* Page content */}
+        <main className="flex-1 overflow-auto">
+          <Outlet />
+        </main>
+
+        {/* Footer */}
+        <footer
+          className="shrink-0 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2"
+          style={{ borderTop: '1px solid var(--border)', backgroundColor: 'var(--bg-surface)' }}
+        >
+          <p className="text-xs" style={{ color: 'var(--text-faint)' }}>
+            VeriFact AI — Misinformation Detection Platform &copy; {new Date().getFullYear()}
           </p>
-          <p className="text-xs text-slate-400 dark:text-slate-700">
-            Model predictions are probabilistic, not factual determinations.
+          <p className="text-xs" style={{ color: 'var(--text-faint)' }}>
+            ML predictions are probabilistic — not factual determinations.
           </p>
-        </div>
-      </footer>
+        </footer>
+      </div>
     </div>
   )
 }

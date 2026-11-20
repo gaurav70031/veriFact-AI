@@ -20,22 +20,24 @@ export function PerformanceBar({ models, metric = 'f1_score' }: PerformanceBarPr
   return (
     <ResponsiveContainer width="100%" height={220}>
       <BarChart data={data} margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+        <CartesianGrid strokeDasharray="3 3" />
         <XAxis
           dataKey="name"
-          tick={{ fill: '#64748b', fontSize: 11 }}
-          axisLine={{ stroke: '#334155' }}
+          tick={{ fill: 'var(--text-subtle)', fontSize: 11 }}
+          axisLine={false}
           tickLine={false}
         />
         <YAxis
           domain={[0, 100]}
-          tick={{ fill: '#64748b', fontSize: 11 }}
+          tick={{ fill: 'var(--text-faint)', fontSize: 11 }}
           axisLine={false}
           tickLine={false}
           tickFormatter={(v: number) => `${v}%`}
         />
         <Tooltip
-          contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', fontSize: '12px' }}
+          contentStyle={{ backgroundColor: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px' }}
+          labelStyle={{ color: 'var(--text-primary)', fontWeight: 600 }}
+          itemStyle={{ color: 'var(--text-secondary)' }}
           formatter={(val: number) => [`${val.toFixed(2)}%`, metricLabels[metric]]}
         />
         <Bar dataKey="value" radius={[4, 4, 0, 0]}>

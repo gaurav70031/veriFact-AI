@@ -249,6 +249,12 @@ class AnalysisResponse(BaseModel):
     ml_verdict:    str
     ml_confidence: Optional[float]
 
+    # ── Gemini fact-check (primary verdict when configured) ───────────────────
+    gemini_verdict:      Optional[str]   = None   # TRUE | FALSE | UNCERTAIN | MISLEADING
+    gemini_confidence:   Optional[float] = None
+    gemini_explanation:  Optional[str]   = None
+    gemini_available:    bool            = False
+
     # ── Evidence-based assessment ─────────────────────────────────────────────
     evidence_verdict:     Optional[str]
     evidence_explanation: Optional[str]

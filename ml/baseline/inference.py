@@ -98,7 +98,19 @@ def predict_single(
         )
 
     if not text or not isinstance(text, str):
-        raise ValueError("text must be a non-empty string.")
+        logger.warning(
+            "predict_single called with empty/None text for model '%s' — returning UNVERIFIED.", model_id
+        )
+        return {
+            "label":            "UNVERIFIED",
+            "is_fake":          None,
+            "confidence":       0.5,
+            "fake_probability": 0.5,
+            "real_probability": 0.5,
+            "model_id":         model_id,
+            "inference_time_ms": 0.0,
+            "warning":          "Input text is empty or None.",
+        }
 
     processed = clean_for_baseline(text) if clean else text
     if not processed:

@@ -32,12 +32,13 @@ import {
   Search, ExternalLink, Calendar, RefreshCw,
   AlertCircle, Wifi, WifiOff, Clock, ChevronDown,
   Newspaper, Zap, ShieldCheck, Info, AlertTriangle,
-  Loader2, ArrowRight, Radio,
+  Loader2, ArrowRight, Radio, Settings2,
 } from 'lucide-react'
 import { cn, formatDate, formatRelativeTime } from '@/lib/utils'
-import { useNewsSearch, useAnalyzeUrl, useAnalyzeClaim } from '@/hooks/useApi'
+import { useNewsSearch, useAnalyzeUrl, useAnalyzeClaim, useProviderStatus } from '@/hooks/useApi'
 import { Badge } from '@/components/ui/Badge'
-import type { EvidenceItem, NewsSearchResult } from '@/types/api'
+import { VerificationPanel } from '@/components/analysis/VerificationPanel'
+import type { EvidenceItem, NewsSearchResult, ProviderStatus } from '@/types/api'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -97,56 +98,33 @@ interface VerifyButtonProps {
 }
 
 function VerifyButton({ item, onVerifyStart }: VerifyButtonProps) {
-  const navigate    = useNavigate()
-  const urlMutation = useAnalyzeUrl()
-  const claimMut    = useAnalyzeClaim()
-  const [busy, setBusy] = useState(false)
+  const [showPanel, setShowPanel] = useState(false)
 
-  const handleVerify = async () => {
-    setBusy(true)
-    onVerifyStart()
-
-    try {
-      // If we have a proper URL, send it for extraction + analysis
-      if (item.url && item.url.startsWith('http')) {
-        const result = await urlMutation.mutateAsync({ url: item.url })
-        navigate(`/results/${result.id}`, { state: { result } })
-      } else {
-        // Fall back to claim analysis using title + snippet
-        const claim = item.title
-        const context = item.description ?? undefined
-        const result = await claimMut.mutateAsync({ claim, context })
-        navigate(`/results/${result.id}`, { state: { result } })
-      }
-    } catch {
-      setBusy(false)
-    }
+  if (showPanel) {
+    return (
+      <div className="mt-3">
+        <VerificationPanel
+          claim={item.title}
+          url={item.url.startsWith('http') ? item.url : undefined}
+          onClose={() => setShowPanel(false)}
+        />
+      </div>
+    )
   }
 
   return (
     <button
-      onClick={handleVerify}
-      disabled={busy}
+      onClick={() => { setShowPanel(true); onVerifyStart() }}
       className={cn(
         'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium',
         'border border-brand-500/30 bg-brand-500/10 text-brand-400',
         'hover:bg-brand-500/20 hover:border-brand-500/50 transition-all duration-150',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
-        'disabled:opacity-50 disabled:cursor-not-allowed',
       )}
-      title="Run fake-news analysis on this article"
+      title="Verify this article's claims using evidence search"
     >
-      {busy ? (
-        <>
-          <Loader2 className="w-3 h-3 animate-spin" />
-          Analysing…
-        </>
-      ) : (
-        <>
-          <ShieldCheck className="w-3 h-3" />
-          Verify this claim
-        </>
-      )}
+      <ShieldCheck className="w-3 h-3" />
+      Verify claims
     </button>
   )
 }
@@ -541,6 +519,9 @@ export default function LiveNews() {
 
   const [queryTime,    setQueryTime]    = useState<number | null>(null)
   const [verifying,    setVerifying]    = useState(false)
+  const [showProviders, setShowProviders] = useState(false)
+
+  const { data: providerData } = useProviderStatus()
 
   const { data, isLoading, error, refetch } = useNewsSearch(activeParams)
 
@@ -577,21 +558,63 @@ export default function LiveNews() {
 
       {/* ── Page header ─────────────────────────────────────────────────── */}
       <div className="mb-7">
-        <div className="flex items-center gap-2.5 mb-2">
-          <div className="p-1.5 rounded-lg bg-brand-500/10 border border-brand-500/20">
-            <Newspaper className="w-5 h-5 text-brand-400" />
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-lg bg-brand-500/10 border border-brand-500/20">
+              <Newspaper className="w-5 h-5 text-brand-400" />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-100">News Verification</h1>
+            <span className="flex items-center gap-1 text-xs text-emerald-500 font-medium ml-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Live
+            </span>
           </div>
-          <h1 className="text-2xl font-bold text-slate-100">Live News</h1>
-          <span className="flex items-center gap-1 text-xs text-emerald-500 font-medium ml-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            Live
-          </span>
+          <button
+            onClick={() => setShowProviders(!showProviders)}
+            className="btn-ghost text-xs flex items-center gap-1"
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+            Providers
+          </button>
         </div>
         <p className="text-sm text-slate-500 leading-relaxed">
-          Search current articles from configured backend providers.
-          The frontend never calls news APIs directly — all requests route
-          through the backend evidence service.
+          Search current articles and verify claims using real evidence sources.
+          Each article card has an inline verification button.
         </p>
+
+        {/* Provider status bar */}
+        {showProviders && providerData && (
+          <div className="mt-3 card p-4">
+            <div className="text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+              Evidence Providers
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(providerData as ProviderStatus[]).map((p: ProviderStatus) => (
+                <div
+                  key={p.name}
+                  className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg"
+                  style={{ backgroundColor: 'var(--bg-surface-2)', border: '1px solid var(--border)' }}
+                >
+                  <div
+                    className={cn('w-2 h-2 rounded-full', p.configured ? 'bg-emerald-400' : 'bg-slate-600')}
+                  />
+                  <span style={{ color: p.configured ? 'var(--text-secondary)' : 'var(--text-faint)' }}>
+                    {p.name}
+                  </span>
+                  {!p.configured && p.env_var && (
+                    <span className="text-xs" style={{ color: 'var(--text-faint)' }}>
+                      (set {p.env_var})
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p className="text-xs mt-2" style={{ color: 'var(--text-faint)' }}>
+              Tavily + NewsAPI + GNews + RSS feeds are searched concurrently.
+              Configure API keys in .env to enable additional providers.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* ── Search bar ──────────────────────────────────────────────────── */}

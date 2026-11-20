@@ -11,6 +11,16 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolve the .env file path at import time:
+# prefer backend/.env, fall back to project-root/.env
+_HERE = Path(__file__).resolve().parent          # app/core/
+_BACKEND_DIR = _HERE.parents[1]                  # backend/
+_PROJECT_DIR = _BACKEND_DIR.parent               # project root
+_ENV_FILE = str(
+    _BACKEND_DIR / ".env" if (_BACKEND_DIR / ".env").exists()
+    else _PROJECT_DIR / ".env"
+)
+
 
 class Settings(BaseSettings):
     # ── Application ───────────────────────────────────────────────────────────
@@ -80,7 +90,9 @@ class Settings(BaseSettings):
     gnews_api_key:   str = ""   # GNews (https://gnews.io)
     serpapi_key:     str = ""   # SerpAPI Google Search
     brave_search_key: str = ""  # Brave Search API
-    search_provider: str = "serpapi"  # "serpapi" | "brave"
+    tavily_api_key:  str = ""   # Tavily Search (https://docs.tavily.com)
+    gemini_api_key:  str = ""   # Google Gemini (https://aistudio.google.com)
+    search_provider: str = "serpapi"  # "serpapi" | "brave" | "tavily"
     rss_feed_urls:   str = ""   # comma-separated
 
     @property
@@ -104,9 +116,9 @@ class Settings(BaseSettings):
     cookie_samesite: str  = "lax"   # "none" + secure=True for cross-site prod
 
     model_config = SettingsConfigDict(
-        # Look for .env in both the backend/ dir and the project root (one level up).
-        # This handles running uvicorn from backend/ where the .env lives at ../
-        env_file=[".env", "../.env"],
+        # Single resolved path — pydantic-settings v2.14 silently drops list/tuple env_file.
+        env_file=_ENV_FILE,
+        env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )

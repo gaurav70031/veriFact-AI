@@ -47,37 +47,35 @@ def _compute_relevance(item: EvidenceItem, keywords: list[str]) -> float:
 
     Factors
     -------
-    keyword_overlap : fraction of query keywords that appear in title + description.
-                      Title matches count double — the title is the most signal-dense
-                      part of a news article.
-    entity_bonus    : multi-word proper noun phrases that appear verbatim score higher.
-    recency_boost   : exponential decay — articles published today score highest.
+    keyword_overlap  : fraction of query keywords in title + description.
+                       Title matches count double.
+    entity_bonus     : multi-word proper noun phrases score higher.
+    recency_boost    : exponential decay — articles published today score highest.
+    trust_tier_bonus : Official (gov/WHO/research) sources get a credibility bonus.
+                       Encoded in provider_name as ":tier1", ":tier2", etc.
+                       Tier 1 (official) = +0.10, Tier 2 (research) = +0.07,
+                       Tier 3-4 (established news) = +0.03.
+                       Low-credibility flag = -0.10 penalty.
 
-    Scoring is strict: partial keyword overlap no longer gives a passable score.
-    An article matching only 1 out of 5 keywords scores close to 0.
+    Scoring is strict: partial keyword overlap gives a low score.
     """
     title_text = (item.title or "").lower()
     body_text  = (item.description or "").lower()
-    full_text  = f"{title_text} {body_text}"
 
     if not keywords:
         keyword_score = 0.5
     else:
-        # Title hits count 2×, body hits count 1×
         title_hits = sum(1 for kw in keywords if kw.lower() in title_text)
         body_hits  = sum(1 for kw in keywords if kw.lower() in body_text)
-        # Weighted overlap over a denominator that rewards title presence
         weighted_hits = title_hits * 2 + body_hits
-        max_possible  = len(keywords) * 2   # all in title
+        max_possible  = len(keywords) * 2
         raw_overlap   = weighted_hits / max_possible if max_possible else 0
+        keyword_score = raw_overlap ** 1.5
 
-        # Apply a strictness curve: overlap must be >50% to score above 0.5
-        # This prevents single common-word matches from ranking highly
-        keyword_score = raw_overlap ** 1.5   # squash low overlaps harder
-
-    # Recency boost — exponential decay with 7-day half-life
+    # Recency boost — 7-day half-life
     recency_score = 0.5
     if item.published_at:
+        from datetime import datetime, timezone
         now     = datetime.now(timezone.utc)
         pub     = item.published_at
         if pub.tzinfo is None:
@@ -85,8 +83,25 @@ def _compute_relevance(item: EvidenceItem, keywords: list[str]) -> float:
         age_days      = max(0.0, (now - pub).total_seconds() / 86400)
         recency_score = 2 ** (-age_days / 7)
 
-    # Keyword overlap is the dominant signal (80%), recency is secondary (20%)
-    score = 0.80 * keyword_score + 0.20 * recency_score
+    # Trust tier bonus from Tavily provider tags
+    trust_bonus = 0.0
+    if ":tier1" in item.provider_name:
+        trust_bonus = 0.10
+    elif ":tier2" in item.provider_name:
+        trust_bonus = 0.07
+    elif ":tier3" in item.provider_name:
+        trust_bonus = 0.04
+    elif ":tier4" in item.provider_name:
+        trust_bonus = 0.03
+
+    # Low-credibility penalty
+    if ":low_credibility" in item.provider_name:
+        trust_bonus -= 0.10
+
+    # Keyword overlap 75%, recency 20%, trust 5% (trust is tie-breaker not driver)
+    score = 0.75 * keyword_score + 0.20 * recency_score + 0.05 * (trust_bonus + 0.10)
+    score += trust_bonus  # apply directly to give meaningful boost
+
     return round(min(max(score, 0.0), 1.0), 4)
 
 
@@ -114,19 +129,28 @@ def _deduplicate(items: list[EvidenceItem]) -> list[EvidenceItem]:
 def _build_default_providers() -> list[EvidenceProvider]:
     """
     Instantiate the production provider set from environment variables.
-    Providers with missing keys are included but will be skipped at runtime
-    (is_configured returns False).
+
+    Provider order (priority high → low):
+    1. Tavily  — AI-optimised, extracts real content, tier-aware source scoring
+    2. NewsAPI — headline + description, relevancy-sorted
+    3. GNews   — international news, relevancy-sorted
+    4. RSS     — curated real-time feeds, no key needed
+    5. Search  — SerpAPI / Brave fallback
+
+    Providers with missing keys skip gracefully (is_configured = False).
     """
     from app.evidence.providers.newsapi_provider import NewsAPIProvider
     from app.evidence.providers.gnews_provider   import GNewsProvider
     from app.evidence.providers.rss_provider     import RSSFeedProvider
     from app.evidence.providers.search_provider  import SearchProvider
+    from app.evidence.providers.tavily_provider  import TavilyProvider
 
     return [
+        TavilyProvider(),     # primary web search — highest quality
         NewsAPIProvider(),
         GNewsProvider(),
         RSSFeedProvider(),
-        SearchProvider(),
+        SearchProvider(),     # SerpAPI / Brave fallback
     ]
 
 
@@ -294,7 +318,7 @@ async def retrieve_evidence(
 
     # ── Drop items with very low relevance (likely noise from RSS feeds) ──────
     # Keep at least 1 item if we have any — but filter out clear mismatches.
-    MIN_RELEVANCE = 0.15
+    MIN_RELEVANCE = 0.25
     relevant = [i for i in deduped if i.relevance_score >= MIN_RELEVANCE]
     if not relevant and deduped:
         # All scored below threshold — keep the best one so we return something

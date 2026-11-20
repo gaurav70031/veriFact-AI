@@ -29,6 +29,8 @@ class ModelAlgorithm(str, enum.Enum):
     LINEAR_SVM = "linear_svm"
     NAIVE_BAYES = "naive_bayes"
     DISTILBERT = "distilbert"
+    BERT = "bert"
+    ROBERTA = "roberta"
     ENSEMBLE = "ensemble"
 
 
@@ -55,6 +57,15 @@ class ModelVersion(TimestampMixin, Base):
     dataset_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     training_samples: Mapped[int | None] = mapped_column(nullable=True)
     test_samples: Mapped[int | None] = mapped_column(nullable=True)
+    random_seed: Mapped[int | None] = mapped_column(nullable=True)
+    hyperparameters_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+
+    # ── Timing ────────────────────────────────────────────────────────────────
+    train_time_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    inference_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)  # per sample
+
+    # ── Model size ────────────────────────────────────────────────────────────
+    model_size_bytes: Mapped[int | None] = mapped_column(nullable=True)
 
     # ── Evaluation metrics (recorded once at training time) ──────────────────
     accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -62,6 +73,11 @@ class ModelVersion(TimestampMixin, Base):
     recall: Mapped[float | None] = mapped_column(Float, nullable=True)
     f1_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     roc_auc: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # ── Extended evaluation data (JSON blobs) ─────────────────────────────────
+    confusion_matrix_json: Mapped[str | None] = mapped_column(Text, nullable=True)   # [[TN,FP],[FN,TP]]
+    training_history_json: Mapped[str | None] = mapped_column(Text, nullable=True)   # [{epoch,train_loss,val_loss,val_acc},...]
+    per_class_metrics_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # {FAKE:{p,r,f1,support}, REAL:{...}}
 
     # ── Status ───────────────────────────────────────────────────────────────
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

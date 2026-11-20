@@ -11,7 +11,7 @@ import logging
 import math
 from typing import Optional
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
@@ -175,14 +175,27 @@ async def get_history(
     verdict:    Optional[str] = None,
     input_type: Optional[str] = None,
     user_id:    Optional[int] = None,
+    search:     Optional[str] = None,
+    date_from:  Optional[str] = None,
+    date_to:    Optional[str] = None,
+    model_id:   Optional[str] = None,
+    confidence_min: Optional[float] = None,
+    confidence_max: Optional[float] = None,
 ) -> PaginatedHistory:
     """
-    Fetch paginated analysis history.
+    Fetch paginated analysis history with full filtering.
 
-    When user_id is provided (authenticated request) only that user's
-    analyses are returned.  Anonymous analyses (user_id=NULL) are only
-    visible to admins or when user_id is not specified.
+    Filters:
+      verdict, input_type, user_id (ownership),
+      search (text across original_input + article_title),
+      date_from/date_to (created_at range),
+      model_id (filter to analyses where a specific model was used),
+      confidence_min/max (confidence range).
     """
+    from datetime import datetime, timezone
+    from app.models.prediction import Prediction
+    from app.models.model_version import ModelVersion
+
     filters = []
 
     # ── User ownership filter ────────────────────────────────────────────────
@@ -200,6 +213,48 @@ async def get_history(
             filters.append(Analysis.input_type == InputType(input_type))
         except ValueError:
             pass
+
+    # ── Text search ──────────────────────────────────────────────────────────
+    if search:
+        search_pattern = f"%{search}%"
+        filters.append(
+            or_(
+                Analysis.original_input.ilike(search_pattern),
+                Analysis.article_title.ilike(search_pattern),
+            )
+        )
+
+    # ── Date range ───────────────────────────────────────────────────────────
+    if date_from:
+        try:
+            dt = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+            filters.append(Analysis.created_at >= dt)
+        except ValueError:
+            pass
+
+    if date_to:
+        try:
+            dt = datetime.fromisoformat(date_to).replace(tzinfo=timezone.utc)
+            filters.append(Analysis.created_at <= dt)
+        except ValueError:
+            pass
+
+    # ── Confidence range ─────────────────────────────────────────────────────
+    if confidence_min is not None:
+        filters.append(Analysis.final_confidence >= confidence_min)
+
+    if confidence_max is not None:
+        filters.append(Analysis.final_confidence <= confidence_max)
+
+    # ── Model filter (subquery on predictions) ───────────────────────────────
+    if model_id:
+        model_subq = (
+            select(Prediction.analysis_id)
+            .join(ModelVersion, Prediction.model_version_id == ModelVersion.id)
+            .where(ModelVersion.model_name == model_id)
+            .distinct()
+        )
+        filters.append(Analysis.id.in_(model_subq))
 
     # Total count
     count_q = select(func.count(Analysis.id))
@@ -247,3 +302,107 @@ async def get_history(
         page_size=page_size,
         total_pages=total_pages,
     )
+
+
+async def get_all_history(
+    db:         AsyncSession,
+    user_id:    Optional[int] = None,
+    verdict:    Optional[str] = None,
+    input_type: Optional[str] = None,
+    search:     Optional[str] = None,
+    date_from:  Optional[str] = None,
+    date_to:    Optional[str] = None,
+    model_id:   Optional[str] = None,
+    confidence_min: Optional[float] = None,
+    confidence_max: Optional[float] = None,
+    limit:      int = 10000,
+) -> list[dict]:
+    """
+    Fetch all history records (no pagination) for CSV export.
+    Returns list of dicts with all analysis fields.
+    """
+    from datetime import datetime, timezone
+    from app.models.prediction import Prediction
+    from app.models.model_version import ModelVersion
+
+    filters = []
+
+    if user_id is not None:
+        filters.append(Analysis.user_id == user_id)
+
+    if verdict:
+        try:
+            filters.append(Analysis.final_verdict == FinalVerdict(verdict))
+        except ValueError:
+            pass
+
+    if input_type:
+        try:
+            filters.append(Analysis.input_type == InputType(input_type))
+        except ValueError:
+            pass
+
+    if search:
+        search_pattern = f"%{search}%"
+        filters.append(
+            or_(
+                Analysis.original_input.ilike(search_pattern),
+                Analysis.article_title.ilike(search_pattern),
+            )
+        )
+
+    if date_from:
+        try:
+            dt = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+            filters.append(Analysis.created_at >= dt)
+        except ValueError:
+            pass
+
+    if date_to:
+        try:
+            dt = datetime.fromisoformat(date_to).replace(tzinfo=timezone.utc)
+            filters.append(Analysis.created_at <= dt)
+        except ValueError:
+            pass
+
+    if confidence_min is not None:
+        filters.append(Analysis.final_confidence >= confidence_min)
+
+    if confidence_max is not None:
+        filters.append(Analysis.final_confidence <= confidence_max)
+
+    if model_id:
+        model_subq = (
+            select(Prediction.analysis_id)
+            .join(ModelVersion, Prediction.model_version_id == ModelVersion.id)
+            .where(ModelVersion.model_name == model_id)
+            .distinct()
+        )
+        filters.append(Analysis.id.in_(model_subq))
+
+    rows_q = (
+        select(Analysis)
+        .order_by(Analysis.created_at.desc())
+        .limit(limit)
+    )
+    if filters:
+        rows_q = rows_q.where(and_(*filters))
+
+    rows_result = await db.execute(rows_q)
+    analyses = rows_result.scalars().all()
+
+    return [
+        {
+            "id":                a.id,
+            "input_type":         a.input_type.value,
+            "original_input":    a.original_input,
+            "source_url":         a.source_url,
+            "article_title":      a.article_title,
+            "final_verdict":      a.final_verdict.value if a.final_verdict else None,
+            "final_confidence":   a.final_confidence,
+            "status":             a.status.value,
+            "processing_time_ms": a.processing_time_ms,
+            "created_at":         a.created_at,
+        }
+        for a in analyses
+    ]

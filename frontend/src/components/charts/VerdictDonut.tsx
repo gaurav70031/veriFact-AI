@@ -44,14 +44,14 @@ export function VerdictDonut({ counts }: VerdictDonutProps) {
           ))}
         </Pie>
         <Tooltip
-          contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', fontSize: '12px' }}
-          labelStyle={{ color: '#94a3b8' }}
-          itemStyle={{ color: '#e2e8f0' }}
+          contentStyle={{ backgroundColor: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px' }}
+          labelStyle={{ color: 'var(--text-primary)', fontWeight: 600 }}
+          itemStyle={{ color: 'var(--text-secondary)' }}
         />
         <Legend
           iconType="circle"
           iconSize={8}
-          wrapperStyle={{ fontSize: '12px', color: '#94a3b8' }}
+          formatter={(v: string) => <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{v}</span>}
         />
       </PieChart>
     </ResponsiveContainer>

@@ -53,9 +53,33 @@ def _check_ml_models() -> ComponentStatus:
                 status="unavailable",
                 message="No trained models loaded. Run training scripts first.",
             )
+
+        # Check if models were trained on toy data (vocab < 100 is a strong signal)
+        toy_data_warning = ""
+        try:
+            from ml.baseline.inference import get_pipeline
+            for model_id in ["logistic_regression", "linear_svm", "naive_bayes"]:
+                try:
+                    pipeline = get_pipeline(model_id)
+                    vocab_size = len(pipeline.named_steps["tfidf"].vocabulary_)
+                    if vocab_size < 100:
+                        toy_data_warning = (
+                            f" WARNING: Models trained on toy data "
+                            f"(vocab={vocab_size} < 100). "
+                            "Download ISOT dataset and run train_baseline.py for real predictions."
+                        )
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        msg = f"Available: {', '.join(available)}{toy_data_warning}"
+        st  = "degraded" if toy_data_warning else "ok"
+
         return ComponentStatus(
-            status="ok",
-            message=f"Available: {', '.join(available)}",
+            status=st,
+            message=msg,
         )
     except Exception as exc:
         return ComponentStatus(status="unavailable", message=str(exc))

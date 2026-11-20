@@ -62,7 +62,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-
 # ── Shared data structures ────────────────────────────────────────────────────
 
 @dataclass
@@ -631,3 +630,184 @@ def aggregate_top_tokens(
 
     aggregated.sort(key=lambda x: abs(x["weight"]), reverse=True)
     return aggregated[:top_n]
+
+
+# ── Annotated text producer ───────────────────────────────────────────────────
+
+def annotate_text(
+    text:         str,
+    token_weights: list[dict],
+    max_length:   int = 2000,
+) -> list[dict]:
+    """
+    Produce an annotated token list for rendering highlighted article text.
+
+    Maps explanation token weights back onto the original words in the text.
+    Words that appear in the top-token list get a weight; others get 0.0.
+
+    Parameters
+    ----------
+    text          : Original (uncleaned) article text, truncated to max_length.
+    token_weights : List of {"token": str, "weight": float} from explanation.
+    max_length    : Truncate text to this many characters before annotating.
+
+    Returns
+    -------
+    List of {"word": str, "weight": float, "is_space": bool} dicts.
+    Caller renders them inline, colouring by weight.
+
+    Design
+    ------
+    * Tokenise on whitespace boundaries (preserving punctuation with the word).
+    * Match against explanation tokens case-insensitively, stripping punctuation
+      from word edges for the lookup key.
+    * Words not found in the explanation set get weight 0.0 (neutral colour).
+    * Spaces are included as {"is_space": True} tokens for natural rendering.
+    """
+    import re as _re
+
+    text_truncated = text[:max_length]
+
+    # Build a quick lookup: cleaned_token -> weight
+    weight_map: dict[str, float] = {}
+    for item in token_weights:
+        key = str(item.get("token", "")).lower().strip()
+        if key:
+            weight_map[key] = float(item.get("weight", 0.0))
+
+    # Split on whitespace, keeping separators
+    parts = _re.split(r"(\s+)", text_truncated)
+    result: list[dict] = []
+
+    for part in parts:
+        if not part:
+            continue
+        if _re.match(r"^\s+$", part):
+            result.append({"word": part, "weight": 0.0, "is_space": True})
+            continue
+
+        # Strip leading/trailing punctuation for the lookup key
+        clean_key = _re.sub(r"^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$", "", part).lower()
+        weight = weight_map.get(clean_key, 0.0)
+
+        result.append({"word": part, "weight": weight, "is_space": False})
+
+    return result
+
+
+# ── Explanation report builder ────────────────────────────────────────────────
+
+def build_explanation_report(
+    analysis_id:        int,
+    original_text:      str,
+    article_title:      Optional[str],
+    ml_verdict:         str,
+    ml_confidence:      Optional[float],
+    evidence_verdict:   Optional[str],
+    model_explanations: list[ExplanationResult],
+    model_predictions:  list[dict],
+    created_at:         str,
+) -> dict:
+    """
+    Build a structured explanation report suitable for JSON download or
+    HTML rendering.
+
+    Parameters
+    ----------
+    analysis_id        : Database ID of the analysis.
+    original_text      : Raw article text (truncated to 2000 chars).
+    article_title      : Article headline if available.
+    ml_verdict         : Overall ML ensemble verdict.
+    ml_confidence      : Ensemble confidence (0.0–1.0).
+    evidence_verdict   : Evidence-based verdict string.
+    model_explanations : List of ExplanationResult objects.
+    model_predictions  : List of raw prediction dicts from inference.
+    created_at         : ISO timestamp of the analysis.
+
+    Returns
+    -------
+    Complete report dict with all fields needed for display and download.
+    """
+    from datetime import datetime, timezone
+
+    # Aggregate tokens across all models
+    agg_tokens = aggregate_top_tokens(model_explanations, top_n=15)
+
+    # Annotated text using aggregate weights
+    annotated = annotate_text(original_text, agg_tokens, max_length=2000)
+
+    # Per-model contribution data for charts
+    per_model_contributions: list[dict] = []
+    for exp in model_explanations:
+        if exp.method == "unavailable":
+            continue
+        fake_tokens = [t for t in exp.top_tokens if t.weight > 0]
+        real_tokens = [t for t in exp.top_tokens if t.weight < 0]
+        per_model_contributions.append({
+            "model_id":    exp.model_id,
+            "method":      exp.method,
+            "label":       exp.label,
+            "fake_signal": round(sum(t.weight for t in fake_tokens), 4),
+            "real_signal": round(sum(abs(t.weight) for t in real_tokens), 4),
+            "top_fake":    [{"token": t.token, "weight": round(t.weight, 4)} for t in fake_tokens[:5]],
+            "top_real":    [{"token": t.token, "weight": round(abs(t.weight), 4)} for t in real_tokens[:5]],
+        })
+
+    # Method-based summary
+    methods_used = list(dict.fromkeys(
+        exp.method for exp in model_explanations if exp.method != "unavailable"
+    ))
+
+    return {
+        "report_version":  "1.0",
+        "generated_at":    datetime.now(timezone.utc).isoformat(),
+        "analysis_id":     analysis_id,
+        "article": {
+            "title":        article_title,
+            "text_preview": original_text[:500] + ("…" if len(original_text) > 500 else ""),
+            "char_count":   len(original_text),
+        },
+        "verdict": {
+            "ml_verdict":       ml_verdict,
+            "ml_confidence":    round(ml_confidence, 4) if ml_confidence is not None else None,
+            "evidence_verdict": evidence_verdict,
+            "created_at":       created_at,
+        },
+        "explanation_methods": methods_used,
+        "annotated_text":      annotated,
+        "top_tokens":          agg_tokens,
+        "per_model":           per_model_contributions,
+        "model_explanations": [
+            {
+                "model_id":   exp.model_id,
+                "method":     exp.method,
+                "label":      exp.label,
+                "plain_text": exp.plain_text,
+                "disclaimer": exp.disclaimer,
+                "top_tokens": [
+                    {"token": t.token, "weight": round(t.weight, 4), "position": t.position}
+                    for t in exp.top_tokens
+                ],
+                "error": exp.error,
+            }
+            for exp in model_explanations
+        ],
+        "limitations": [
+            "Token weights reflect statistical patterns from training data, "
+            "not factual truth.",
+            "A high-weight word means the model has seen similar language in "
+            "training examples of that class — it does not prove any claim.",
+            "LIME and SHAP are approximations — results vary slightly between runs.",
+            "Attention weights show correlation, not causation, between tokens "
+            "and the model's decision.",
+            "Models were trained on ISOT (2015–2018 US political news). Results "
+            "may not generalise to other domains or time periods.",
+        ],
+        "references": [
+            "Ribeiro et al. (2016). 'Why Should I Trust You?': LIME.",
+            "Lundberg & Lee (2017). A Unified Approach to Interpreting Model Predictions: SHAP.",
+            "Sundararajan et al. (2017). Axiomatic Attribution for Deep Networks: Integrated Gradients.",
+            "Jain & Wallace (2019). Attention is not Explanation. NAACL 2019.",
+            "Abnar & Zuidema (2020). Quantifying Attention Flow in Transformers.",
+        ],
+    }

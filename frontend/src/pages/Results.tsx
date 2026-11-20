@@ -30,7 +30,7 @@ import { useEffect } from 'react'
 import { useParams, useLocation, Link } from 'react-router-dom'
 import {
   ArrowLeft, ExternalLink, Clock, Hash,
-  FileText, Link2, MessageSquareText,
+  FileText, Link2, MessageSquareText, AlertTriangle,
 } from 'lucide-react'
 import { useAnalysis } from '@/hooks/useApi'
 import { Spinner } from '@/components/ui/Spinner'
@@ -46,6 +46,50 @@ import { ExplainabilitySection } from '@/components/results/ExplainabilitySectio
 import { ReportFooter }         from '@/components/results/ReportFooter'
 
 import type { AnalysisResponse, EvidenceSourceResult } from '@/types/api'
+
+// ── Gemini Verdict Card ───────────────────────────────────────────────────────
+
+const GEMINI_STYLES: Record<string, { bg: string; border: string; badge: string; icon: string; label: string }> = {
+  TRUE:       { bg: 'bg-green-900/20',  border: 'border-green-500/40',  badge: 'bg-green-500/20 text-green-300',  icon: '✅', label: 'TRUE'       },
+  FALSE:      { bg: 'bg-red-900/20',    border: 'border-red-500/40',    badge: 'bg-red-500/20 text-red-300',      icon: '❌', label: 'FALSE'      },
+  UNCERTAIN:  { bg: 'bg-yellow-900/20', border: 'border-yellow-500/40', badge: 'bg-yellow-500/20 text-yellow-300',icon: '⚠️', label: 'UNCERTAIN'  },
+  MISLEADING: { bg: 'bg-orange-900/20', border: 'border-orange-500/40', badge: 'bg-orange-500/20 text-orange-300',icon: '⚠️', label: 'MISLEADING' },
+}
+
+function GeminiVerdictCard({
+  verdict, confidence, explanation
+}: {
+  verdict: string; confidence: number; explanation: string
+}) {
+  const style = GEMINI_STYLES[verdict] ?? GEMINI_STYLES['UNCERTAIN']
+  return (
+    <div className={`rounded-xl border p-5 ${style.bg} ${style.border}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">{style.icon}</span>
+          <span className="text-sm font-semibold text-text-secondary uppercase tracking-wide">
+            Gemini AI Fact-Check
+          </span>
+          <span className="text-xs text-text-muted bg-surface-2 px-2 py-0.5 rounded-full">
+            Primary verdict
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`text-xs font-bold px-3 py-1 rounded-full ${style.badge}`}>
+            {style.label}
+          </span>
+          <span className="text-sm font-semibold text-text-primary">
+            {Math.round(confidence * 100)}% confident
+          </span>
+        </div>
+      </div>
+      <p className="text-sm text-text-primary leading-relaxed">{explanation}</p>
+      <p className="text-xs text-text-muted mt-2">
+        Gemini reads live evidence and applies world knowledge — including Indian context, current events, and post-2018 topics.
+      </p>
+    </div>
+  )
+}
 
 // ── Input type icon ───────────────────────────────────────────────────────────
 
@@ -239,6 +283,9 @@ export default function Results() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // Detect toy-data warning from summary field
+  const isToyDataWarning = result.summary?.includes('MODEL QUALITY WARNING') ?? false
+
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 animate-fade-in">
 
@@ -247,12 +294,54 @@ export default function Results() {
         <PageHeader result={result} />
       </div>
 
+      {/* ① Toy-data model quality warning (shown when training on synthetic data) */}
+      {isToyDataWarning && (
+        <div className="mb-6 flex items-start gap-3 p-4 rounded-xl"
+          style={{ backgroundColor: 'rgba(248,113,113,0.07)', border: '1px solid rgba(248,113,113,0.3)' }}>
+          <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-red-400 mb-1">
+              ML predictions are unreliable — models trained on synthetic toy data
+            </p>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+              The machine learning models currently have a vocabulary of only <strong>10 words</strong> (from a 200-row synthetic development dataset).
+              They cannot meaningfully classify real news articles and return a 50/50 coin flip for every input.
+            </p>
+            <p className="text-xs mt-1.5 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+              <strong style={{ color: 'var(--text-primary)' }}>To get real predictions:</strong> Download the{' '}
+              <a href="https://www.kaggle.com/datasets/clmentbisaillon/fake-and-real-news-dataset" target="_blank" rel="noopener noreferrer" className="text-brand-400 underline">ISOT dataset from Kaggle</a>
+              , place <code className="font-mono text-xs text-brand-400">Fake.csv</code> and <code className="font-mono text-xs text-brand-400">True.csv</code> in{' '}
+              <code className="font-mono text-xs text-brand-400">ml/datasets/raw/</code>, then run:
+            </p>
+            <pre className="text-xs font-mono mt-2 p-2 rounded" style={{ backgroundColor: 'rgba(0,0,0,0.3)', color: '#94d82d' }}>
+{`python scripts/prepare_dataset.py --files ml/datasets/raw/Fake.csv ml/datasets/raw/True.csv
+python scripts/train_baseline.py
+python scripts/register_models.py --overwrite`}
+            </pre>
+            <p className="text-xs mt-1.5" style={{ color: 'var(--text-subtle)' }}>
+              The evidence retrieval results below are real and unaffected by this issue.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ② Source metadata (URL / title) */}
       <div className="mb-6">
         <SourceMeta result={result} />
       </div>
 
-      {/* ③ Assessment Hero — dual ML + evidence verdict */}
+      {/* ③ Gemini Verdict — primary result when available */}
+      {result.gemini_available && result.gemini_verdict && (
+        <div className="mb-6">
+          <GeminiVerdictCard
+            verdict={result.gemini_verdict}
+            confidence={result.gemini_confidence ?? 0}
+            explanation={result.gemini_explanation ?? ''}
+          />
+        </div>
+      )}
+
+      {/* ④ Assessment Hero — ML + evidence signals */}
       <div className="mb-6">
         <AssessmentHero
           mlVerdict={result.ml_verdict}

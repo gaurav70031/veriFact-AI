@@ -22,8 +22,8 @@ export function ModelRadar({ models }: ModelRadarProps) {
   return (
     <ResponsiveContainer width="100%" height={300}>
       <RadarChart data={data}>
-        <PolarGrid stroke="#334155" />
-        <PolarAngleAxis dataKey="metric" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+        <PolarGrid stroke="var(--border)" />
+        <PolarAngleAxis dataKey="metric" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
         {models.map((m, i) => (
           <Radar
             key={m.model_name}
@@ -36,12 +36,15 @@ export function ModelRadar({ models }: ModelRadarProps) {
           />
         ))}
         <Tooltip
-          contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', fontSize: '12px' }}
+          contentStyle={{ backgroundColor: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px' }}
+          labelStyle={{ color: 'var(--text-primary)', fontWeight: 600 }}
+          itemStyle={{ color: 'var(--text-secondary)' }}
           formatter={(val: number) => `${val.toFixed(1)}%`}
         />
         <Legend
-          iconType="line"
-          wrapperStyle={{ fontSize: '11px', color: '#94a3b8' }}
+          iconType="circle"
+          iconSize={8}
+          formatter={(v: string) => <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>{v.replace(/_/g, ' ')}</span>}
         />
       </RadarChart>
     </ResponsiveContainer>

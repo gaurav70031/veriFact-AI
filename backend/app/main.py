@@ -47,6 +47,7 @@ from app.core.errors import (
 from app.api.v1.router import api_router
 from app.db.session import create_all_tables, dispose_engine
 from app.ml.model_registry import get_registry
+from app.core.rate_limiter import RateLimitMiddleware
 
 settings = get_settings()
 
@@ -111,8 +112,9 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ── Middleware ────────────────────────────────────────────────────────────
+    # ── Middleware (order matters: outermost first) ───────────────────────────
 
+    # CORS
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -121,23 +123,31 @@ def create_app() -> FastAPI:
         allow_headers=["Content-Type", "Authorization"],
     )
 
+    # GZip compression
     app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-    # Request body size limit
+    # Rate limiting (production only; disabled in dev via env var)
+    app.add_middleware(RateLimitMiddleware)
+
+    # Request body size limit (general: 1 MB; uploads handled separately)
     @app.middleware("http")
     async def limit_body_size(request: Request, call_next):
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > settings.max_request_body:
-            return JSONResponse(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                content={
-                    "error": "REQUEST_TOO_LARGE",
-                    "message": (
-                        f"Request body exceeds the maximum allowed size "
-                        f"of {settings.max_request_body // 1024} KB."
-                    ),
-                },
-            )
+        if content_length:
+            size = int(content_length)
+            # Allow larger uploads for dataset upload endpoint
+            max_size = 200 * 1024 * 1024 if request.url.path.startswith("/api/v1/datasets/upload") else settings.max_request_body
+            if size > max_size:
+                return JSONResponse(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    content={
+                        "error": "REQUEST_TOO_LARGE",
+                        "message": (
+                            f"Request body exceeds the maximum allowed size "
+                            f"of {max_size // 1024} KB."
+                        ),
+                    },
+                )
         return await call_next(request)
 
     # Request logging

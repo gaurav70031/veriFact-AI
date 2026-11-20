@@ -236,13 +236,17 @@ async def _fetch_html(url: str) -> tuple[str, str]:
                     f"Redirect blocked for security reasons: {exc.message}"
                 )
 
+    async def _on_redirect_async(response: httpx.Response) -> None:
+        """Async wrapper required by httpx >= 0.27 event_hooks."""
+        _on_redirect(response)
+
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(_READ_TIMEOUT, connect=_CONNECT_TIMEOUT),
             follow_redirects=True,
             max_redirects=_MAX_REDIRECTS,
             headers={"User-Agent": _USER_AGENT},
-            event_hooks={"response": [_on_redirect]},
+            event_hooks={"response": [_on_redirect_async]},
         ) as client:
             # Stream the response so we can abort at MAX_RESPONSE_BYTES
             async with client.stream("GET", url) as response:

@@ -29,9 +29,27 @@ nltk>=3.8.0
 numpy>=1.26.0
 pandas>=2.2.0
 
+# ── Deep learning (transformers) ─────────────────────────────────────────────
+# Install PyTorch separately for your platform:
+#   CPU:  pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.2.0
+transformers>=4.40.0
+
+# ── Explainability ────────────────────────────────────────────────────────────
+lime>=0.2.0.1
+shap>=0.45.0
+
+# ── Sentiment analysis ────────────────────────────────────────────────────────
+vaderSentiment>=3.3.2
+
+# ── PDF report generation ─────────────────────────────────────────────────────
+reportlab>=4.0.0
+
 # ── Utilities ─────────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
 python-dateutil>=2.9.0
+tqdm>=4.66.0
 
 # ── Authentication ────────────────────────────────────────────────────────────
 python-jose[cryptography]>=3.3.0
