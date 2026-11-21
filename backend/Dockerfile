@@ -46,6 +46,14 @@ RUN chmod +x /app/docker/entrypoint.sh
 RUN mkdir -p ml/saved_models logs \
  && chown -R appuser:appgroup /app
 
+# Download NLTK data at build time so startup is instant
+RUN python -c "\
+import nltk, os; \
+os.makedirs('/app/nltk_data', exist_ok=True); \
+[nltk.download(p, download_dir='/app/nltk_data', quiet=True) \
+ for p in ['punkt','punkt_tab','stopwords','wordnet','averaged_perceptron_tagger']]" \
+ || true
+
 USER appuser
 
 ENV PYTHONUNBUFFERED=1 \

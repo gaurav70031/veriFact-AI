@@ -3,41 +3,22 @@
 # Backend container entrypoint.
 #
 # Steps on every container start:
-#   1. Download NLTK data (cached after first run)
-#   2. Parse DATABASE_URL if individual POSTGRES_* vars aren't set
-#   3. Wait for PostgreSQL to be ready (up to 60 s)
-#   4. Run Alembic migrations (idempotent)
-#   5. Start the FastAPI server
+#   1. Parse DATABASE_URL into POSTGRES_* vars (Render provides DATABASE_URL)
+#   2. Wait for PostgreSQL to be ready (up to 60 s)
+#   3. Run Alembic migrations (idempotent)
+#   4. Start the FastAPI server
+#
+# NLTK data is downloaded at Docker build time — not at startup.
 # =============================================================================
 
 set -e
 
-# ── 1. Download NLTK data ────────────────────────────────────────────────────
-echo "[entrypoint] Downloading NLTK data..."
-python -c "
-import nltk, os
-data_dir = os.environ.get('NLTK_DATA', '/app/nltk_data')
-os.makedirs(data_dir, exist_ok=True)
-for pkg in ['punkt', 'stopwords', 'wordnet', 'averaged_perceptron_tagger']:
-    try:
-        nltk.download(pkg, download_dir=data_dir, quiet=True)
-    except Exception:
-        pass
-print('[entrypoint] NLTK data ready.')
-"
-
-# ── 2. Parse DATABASE_URL if set (Render provides this automatically) ────────
-# Render injects DATABASE_URL in the format:
-#   postgresql://user:password@host:port/dbname
-# Parse it into individual POSTGRES_* vars if they're not already set correctly.
-
+# ── 1. Parse DATABASE_URL if set (Render provides this automatically) ────────
 if [ -n "$DATABASE_URL" ]; then
     echo "[entrypoint] Parsing DATABASE_URL..."
-    # Strip the scheme
     _url="${DATABASE_URL#postgresql://}"
     _url="${_url#postgres://}"
 
-    # Extract user:password@host:port/dbname
     _userinfo="${_url%%@*}"
     _hostinfo="${_url#*@}"
 
@@ -46,7 +27,6 @@ if [ -n "$DATABASE_URL" ]; then
 
     _hostport="${_hostinfo%%/*}"
     POSTGRES_DB="${_hostinfo#*/}"
-    # Remove any query string from db name
     POSTGRES_DB="${POSTGRES_DB%%\?*}"
 
     if echo "$_hostport" | grep -q ':'; then
@@ -61,7 +41,7 @@ if [ -n "$DATABASE_URL" ]; then
     echo "[entrypoint] DB host: $POSTGRES_HOST  port: $POSTGRES_PORT  db: $POSTGRES_DB"
 fi
 
-# ── 3. Wait for PostgreSQL ────────────────────────────────────────────────────
+# ── 2. Wait for PostgreSQL ────────────────────────────────────────────────────
 echo "[entrypoint] Waiting for PostgreSQL at ${POSTGRES_HOST}:${POSTGRES_PORT}..."
 
 RETRIES=30
@@ -71,7 +51,7 @@ try:
     s = socket.create_connection(('${POSTGRES_HOST}', int('${POSTGRES_PORT:-5432}')), timeout=2)
     s.close()
     sys.exit(0)
-except Exception as e:
+except Exception:
     sys.exit(1)
 " 2>/dev/null; do
     RETRIES=$((RETRIES - 1))
@@ -85,12 +65,12 @@ done
 
 echo "[entrypoint] PostgreSQL is ready."
 
-# ── 4. Run Alembic migrations ─────────────────────────────────────────────────
+# ── 3. Run Alembic migrations ─────────────────────────────────────────────────
 echo "[entrypoint] Running database migrations..."
 cd /app
 alembic upgrade head
 echo "[entrypoint] Migrations complete."
 
-# ── 5. Start the application ──────────────────────────────────────────────────
+# ── 4. Start the application ──────────────────────────────────────────────────
 echo "[entrypoint] Starting application..."
 exec "$@"
