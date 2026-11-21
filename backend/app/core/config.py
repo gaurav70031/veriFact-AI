@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve the .env file path at import time:
@@ -45,9 +46,17 @@ class Settings(BaseSettings):
     postgres_db:       str = "fakenews_db"
     postgres_user:     str = "fakenews_user"
     postgres_password: str = "password"
+    # Render provides DATABASE_URL directly — used as override when set
+    database_url_override: str = Field("", alias="DATABASE_URL", validation_alias="DATABASE_URL")
 
     @property
     def database_url(self) -> str:
+        if self.database_url_override:
+            # Convert postgres:// → postgresql+asyncpg://
+            url = self.database_url_override
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            return url
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -56,6 +65,11 @@ class Settings(BaseSettings):
     @property
     def database_url_sync(self) -> str:
         """Synchronous URL for Alembic — explicitly uses psycopg2."""
+        if self.database_url_override:
+            url = self.database_url_override
+            url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+            return url
         return (
             f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -75,8 +89,11 @@ class Settings(BaseSettings):
 
     @property
     def ml_root(self) -> Path:
-        # backend/ is one level below project root
-        return Path(__file__).resolve().parents[3] / self.ml_saved_models_dir
+        # In Docker: /app/ml/saved_models  (ml/ is copied alongside app/)
+        # In local dev: project_root/ml/saved_models (backend/ is one level below)
+        docker_path = Path(__file__).resolve().parents[2] / self.ml_saved_models_dir
+        local_path  = Path(__file__).resolve().parents[3] / self.ml_saved_models_dir
+        return docker_path if docker_path.exists() else local_path
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     allowed_origins: str = "http://localhost:5173,http://localhost:3000"
